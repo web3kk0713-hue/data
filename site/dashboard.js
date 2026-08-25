@@ -268,6 +268,8 @@ function hideChartTooltip() {
   tooltip.style.removeProperty("right");
   tooltip.style.removeProperty("top");
   tooltip.style.removeProperty("bottom");
+  tooltip.style.removeProperty("width");
+  tooltip.style.removeProperty("max-width");
 }
 
 function showChartTooltip(content, event = null, anchor = null, options = {}) {
@@ -276,26 +278,54 @@ function showChartTooltip(content, event = null, anchor = null, options = {}) {
   tooltip.classList.add("is-visible");
   tooltip.classList.toggle("is-mobile", Boolean(options.mobile));
   tooltip.classList.toggle("is-shared", Boolean(options.shared));
-  if (options.mobile) {
-    tooltip.style.removeProperty("top");
-    tooltip.style.removeProperty("left");
-    tooltip.style.right = "12px";
-    tooltip.style.bottom = "calc(12px + env(safe-area-inset-bottom))";
-    return;
-  }
+  tooltip.style.removeProperty("left");
   tooltip.style.removeProperty("right");
+  tooltip.style.removeProperty("top");
   tooltip.style.removeProperty("bottom");
-  const gap = 12;
+  tooltip.style.removeProperty("width");
+  tooltip.style.removeProperty("max-width");
+
+  const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
+  const gap = 10;
   const viewportPadding = 8;
   const anchorRect = anchor?.getBoundingClientRect();
   const originX = event?.clientX ?? (anchorRect ? anchorRect.left + anchorRect.width / 2 : window.innerWidth / 2);
-  const originY = event?.clientY ?? (anchorRect ? anchorRect.bottom : window.innerHeight / 2);
-  let left = originX + gap;
-  let top = originY + gap;
-  if (left + tooltip.offsetWidth > window.innerWidth - viewportPadding) left = originX - tooltip.offsetWidth - gap;
-  if (top + tooltip.offsetHeight > window.innerHeight - viewportPadding) top = originY - tooltip.offsetHeight - gap;
-  tooltip.style.left = `${Math.max(viewportPadding, left)}px`;
-  tooltip.style.top = `${Math.max(viewportPadding, top)}px`;
+  const originY = event?.clientY ?? (anchorRect ? anchorRect.top + anchorRect.height / 2 : window.innerHeight / 2);
+
+  let left;
+  let top;
+  if (options.placement === "chart" && anchorRect) {
+    const chartRect = anchor.closest(".line-chart")?.getBoundingClientRect() ?? anchorRect;
+    const chartWidth = Math.max(220, chartRect.width - gap * 2);
+    tooltip.style.maxWidth = `${Math.min(360, chartWidth)}px`;
+    const tooltipWidth = tooltip.offsetWidth;
+    const tooltipHeight = tooltip.offsetHeight;
+    const cursorOnRight = originX > chartRect.left + chartRect.width / 2;
+    left = cursorOnRight ? chartRect.left + gap : chartRect.right - tooltipWidth - gap;
+    const minimumTop = Math.max(viewportPadding, chartRect.top + gap);
+    const maximumTop = Math.min(window.innerHeight - viewportPadding - tooltipHeight, chartRect.bottom - gap - tooltipHeight);
+    top = maximumTop >= minimumTop ? minimumTop : clamp(chartRect.top + gap, viewportPadding, window.innerHeight - tooltipHeight - viewportPadding);
+    left = clamp(left, Math.max(viewportPadding, chartRect.left + gap), Math.min(window.innerWidth - tooltipWidth - viewportPadding, chartRect.right - tooltipWidth - gap));
+  } else if (options.mobile && anchorRect) {
+    const tooltipWidth = tooltip.offsetWidth;
+    const tooltipHeight = tooltip.offsetHeight;
+    left = anchorRect.left + anchorRect.width / 2 - tooltipWidth / 2;
+    const above = anchorRect.top - tooltipHeight - gap;
+    const below = anchorRect.bottom + gap;
+    if (above >= viewportPadding) top = above;
+    else if (below + tooltipHeight <= window.innerHeight - viewportPadding) top = below;
+    else top = clamp(originY - tooltipHeight / 2, viewportPadding, window.innerHeight - tooltipHeight - viewportPadding);
+  } else {
+    const tooltipWidth = tooltip.offsetWidth;
+    const tooltipHeight = tooltip.offsetHeight;
+    left = originX + gap;
+    top = originY + gap;
+    if (left + tooltipWidth > window.innerWidth - viewportPadding) left = originX - tooltipWidth - gap;
+    if (top + tooltipHeight > window.innerHeight - viewportPadding) top = originY - tooltipHeight - gap;
+  }
+
+  tooltip.style.left = `${clamp(left, viewportPadding, window.innerWidth - tooltip.offsetWidth - viewportPadding)}px`;
+  tooltip.style.top = `${clamp(top, viewportPadding, window.innerHeight - tooltip.offsetHeight - viewportPadding)}px`;
 }
 
 function beijingDate(value, includeSeconds = false) {
@@ -643,7 +673,7 @@ function renderLineChart(rows) {
     keyboardIndex = timeline.indexOf(timestamp);
     overlay.setAttribute("aria-valuenow", keyboardIndex);
     overlay.setAttribute("aria-valuetext", lines.join("；"));
-    showChartTooltip(lines.join("\n"), event, overlay, { mobile, shared: true });
+    showChartTooltip(lines.join("\n"), event, overlay, { mobile, shared: true, placement: "chart" });
   };
 
   const timestampFromPointer = (event) => {
