@@ -246,15 +246,45 @@ function formatCompactPct(value) {
   return formatPct(value, 6);
 }
 
-function hideChartTooltip() {
-  const tooltip = $("#chart-tooltip");
-  tooltip.classList.remove("is-visible");
+let armedBar = null;
+let armedBarTimer = null;
+
+function isCoarsePointer() {
+  return window.matchMedia("(hover: none), (pointer: coarse)").matches;
 }
 
-function showChartTooltip(content, event = null, anchor = null) {
+function clearArmedBar(hideTooltip = false) {
+  window.clearTimeout(armedBarTimer);
+  if (armedBar) armedBar.removeAttribute("data-touch-armed");
+  armedBar = null;
+  if (hideTooltip) hideChartTooltip();
+}
+
+function hideChartTooltip() {
+  const tooltip = $("#chart-tooltip");
+  tooltip.classList.remove("is-visible", "is-mobile", "is-shared");
+  $$(".shared-cursor.is-visible").forEach((cursor) => cursor.classList.remove("is-visible"));
+  tooltip.style.removeProperty("left");
+  tooltip.style.removeProperty("right");
+  tooltip.style.removeProperty("top");
+  tooltip.style.removeProperty("bottom");
+}
+
+function showChartTooltip(content, event = null, anchor = null, options = {}) {
   const tooltip = $("#chart-tooltip");
   tooltip.textContent = content;
   tooltip.classList.add("is-visible");
+  tooltip.classList.toggle("is-mobile", Boolean(options.mobile));
+  tooltip.classList.toggle("is-shared", Boolean(options.shared));
+  if (options.mobile) {
+    tooltip.style.removeProperty("top");
+    tooltip.style.removeProperty("left");
+    tooltip.style.right = "12px";
+    tooltip.style.bottom = "calc(12px + env(safe-area-inset-bottom))";
+    return;
+  }
+  tooltip.style.removeProperty("right");
+  tooltip.style.removeProperty("bottom");
   const gap = 12;
   const viewportPadding = 8;
   const anchorRect = anchor?.getBoundingClientRect();
@@ -402,12 +432,38 @@ function renderMetricCell(label, metric) {
 
 function bindBarInteractions() {
   $$('[data-bar]').forEach((button) => {
-    button.addEventListener("pointerenter", (event) => showChartTooltip(button.dataset.tooltip, event, button));
-    button.addEventListener("pointermove", (event) => showChartTooltip(button.dataset.tooltip, event, button));
-    button.addEventListener("focus", () => showChartTooltip(button.dataset.tooltip, null, button));
-    button.addEventListener("pointerleave", hideChartTooltip);
+    button.addEventListener("pointerdown", (event) => { button.dataset.pointerType = event.pointerType || "mouse"; });
+    button.addEventListener("pointerenter", (event) => {
+      if (event.pointerType !== "touch") showChartTooltip(button.dataset.tooltip, event, button);
+    });
+    button.addEventListener("pointermove", (event) => {
+      if (event.pointerType !== "touch") showChartTooltip(button.dataset.tooltip, event, button);
+    });
+    button.addEventListener("focus", () => {
+      if (!isCoarsePointer()) showChartTooltip(button.dataset.tooltip, null, button);
+    });
+    button.addEventListener("pointerleave", (event) => {
+      if (event.pointerType !== "touch" && armedBar !== button) hideChartTooltip();
+    });
     button.addEventListener("blur", hideChartTooltip);
-    button.addEventListener("click", () => drillDown(button.dataset.asset, button.dataset.venue, METRIC_META[state.metric].direction));
+    button.addEventListener("click", (event) => {
+      const touchClick = button.dataset.pointerType === "touch" || (event.detail > 0 && isCoarsePointer());
+      if (!touchClick) {
+        drillDown(button.dataset.asset, button.dataset.venue, METRIC_META[state.metric].direction);
+        return;
+      }
+      event.preventDefault();
+      if (armedBar === button) {
+        clearArmedBar(true);
+        drillDown(button.dataset.asset, button.dataset.venue, METRIC_META[state.metric].direction);
+        return;
+      }
+      clearArmedBar(false);
+      armedBar = button;
+      button.setAttribute("data-touch-armed", "true");
+      showChartTooltip(`${button.dataset.tooltip}\n再次点击进入详情`, event, button, { mobile: true });
+      armedBarTimer = window.setTimeout(() => clearArmedBar(true), 5000);
+    });
   });
 }
 
@@ -424,6 +480,7 @@ function drillDown(asset, venue, direction = "ALL") {
 
 function setView(view) {
   state.view = view;
+  clearArmedBar(true);
   $("#overview-view").hidden = view !== "overview";
   $("#details-view").hidden = view !== "details";
   $$('[data-view]').forEach((button) => {
@@ -490,7 +547,11 @@ function renderLineChart(rows) {
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(row);
   });
-  const series = [...grouped.entries()];
+  const series = [...grouped.entries()].map(([name, points]) => [
+    name,
+    [...points].sort((a, b) => a.timestamp_ms - b.timestamp_ms),
+  ]);
+  const timeline = [...new Set(rows.map((row) => row.timestamp_ms))].sort((a, b) => a - b);
   const width = Math.max(320, Math.round(container.clientWidth || 980));
   const compact = width < 560;
   const height = compact ? 220 : 300;
@@ -515,28 +576,109 @@ function renderLineChart(rows) {
   const zero = minY <= 0 && maxY >= 0 ? `<line class="chart-zero" x1="${margin.left}" y1="${y(0)}" x2="${width - margin.right}" y2="${y(0)}"/>` : "";
   const paths = series.map(([name, points], index) => {
     const color = SERIES_COLORS[index % SERIES_COLORS.length];
-    const path = points.map((point, pointIndex) => `${pointIndex ? "L" : "M"}${x(point.timestamp_ms).toFixed(2)},${y(point.view_net).toFixed(2)}`).join(" ");
+    const path = points.map((point, pointIndex) => {
+      const pointX = x(point.timestamp_ms).toFixed(2);
+      const pointY = y(point.view_net).toFixed(2);
+      return pointIndex ? `H${pointX}V${pointY}` : `M${pointX},${pointY}`;
+    }).join(" ");
     const last = points.at(-1);
-    const hitPoints = points.map((point) => {
-      const tooltip = [
-        name,
-        beijingDate(point.timestamp, true),
-        `本次费率 ${formatPct(point.funding_rate)}`,
-        `累计净资费 ${formatPct(point.view_net)}`,
-      ].join("\n");
-      return `<circle class="chart-hit" cx="${x(point.timestamp_ms)}" cy="${y(point.view_net)}" r="8" tabindex="0" style="--series-color:${color}" data-line-point data-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"></circle>`;
-    }).join("");
-    return `<path class="chart-line" d="${path}" stroke="${color}"/><circle class="chart-dot" cx="${x(last.timestamp_ms)}" cy="${y(last.view_net)}" r="4" fill="${color}"></circle>${hitPoints}`;
+    return `<path class="chart-line" d="${path}" stroke="${color}"/><circle class="chart-dot" cx="${x(last.timestamp_ms)}" cy="${y(last.view_net)}" r="4" fill="${color}"></circle>`;
   }).join("");
   const xTicks = Array.from({ length: 4 }, (_, index) => minX + (maxX - minX) * index / 3);
   const xLabels = xTicks.map((tick, index) => `<text class="chart-axis" x="${x(tick)}" y="${height - 8}" text-anchor="${index === 0 ? "start" : index === 3 ? "end" : "middle"}">${beijingDate(tick).slice(5, 16)}</text>`).join("");
-  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="line-chart-title line-chart-desc"><title id="line-chart-title">累计净资费路径</title><desc id="line-chart-desc">${series.length} 个序列，共 ${rows.length} 个结算点。</desc>${grid}${zero}${paths}${xLabels}</svg>`;
-  $$('[data-line-point]', container).forEach((point) => {
-    point.addEventListener("pointerenter", (event) => showChartTooltip(point.dataset.tooltip, event, point));
-    point.addEventListener("pointermove", (event) => showChartTooltip(point.dataset.tooltip, event, point));
-    point.addEventListener("focus", () => showChartTooltip(point.dataset.tooltip, null, point));
-    point.addEventListener("pointerleave", hideChartTooltip);
-    point.addEventListener("blur", hideChartTooltip);
+  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="line-chart-title line-chart-desc"><title id="line-chart-title">累计净资费路径</title><desc id="line-chart-desc">${series.length} 个序列，共 ${rows.length} 个结算点；移动或点击共享时间游标可比较同一时刻。</desc>${grid}${zero}${paths}<g class="shared-cursor" data-shared-cursor aria-hidden="true"><line class="chart-crosshair" y1="${margin.top}" y2="${height - margin.bottom}"></line><g data-shared-markers></g></g><rect class="chart-overlay" data-line-overlay x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}" tabindex="0" role="slider" aria-label="共享时间游标" aria-valuemin="0" aria-valuemax="${timeline.length - 1}" aria-valuenow="${timeline.length - 1}"></rect>${xLabels}</svg>`;
+
+  const overlay = $('[data-line-overlay]', container);
+  const cursor = $('[data-shared-cursor]', container);
+  const crosshair = cursor.querySelector(".chart-crosshair");
+  const markerLayer = cursor.querySelector('[data-shared-markers]');
+  let keyboardIndex = timeline.length - 1;
+
+  const latestAt = (points, timestamp) => {
+    let low = 0;
+    let high = points.length - 1;
+    let found = null;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      if (points[middle].timestamp_ms <= timestamp) {
+        found = points[middle];
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return found;
+  };
+
+  const nearestTimelineIndex = (target) => {
+    let low = 0;
+    let high = timeline.length - 1;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (timeline[middle] < target) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0 && Math.abs(timeline[low - 1] - target) <= Math.abs(timeline[low] - target)) return low - 1;
+    return low;
+  };
+
+  const showSharedTimestamp = (timestamp, event = null, mobile = false) => {
+    const cursorX = x(timestamp);
+    crosshair.setAttribute("x1", cursorX);
+    crosshair.setAttribute("x2", cursorX);
+    const lines = [beijingDate(timestamp, true)];
+    const markers = [];
+    series.forEach(([name, points], index) => {
+      const latest = latestAt(points, timestamp);
+      if (!latest) {
+        lines.push(`${name}  尚未开始`);
+        return;
+      }
+      const exact = latest.timestamp_ms === timestamp;
+      lines.push(`${name}  ${exact ? `本次 ${formatPct(latest.funding_rate)}` : "此刻无结算"}  · 净 ${formatPct(latest.view_net)}`);
+      markers.push(`<circle class="shared-marker" cx="${cursorX}" cy="${y(latest.view_net)}" r="4" fill="${SERIES_COLORS[index % SERIES_COLORS.length]}"></circle>`);
+    });
+    markerLayer.innerHTML = markers.join("");
+    cursor.classList.add("is-visible");
+    keyboardIndex = timeline.indexOf(timestamp);
+    overlay.setAttribute("aria-valuenow", keyboardIndex);
+    overlay.setAttribute("aria-valuetext", lines.join("；"));
+    showChartTooltip(lines.join("\n"), event, overlay, { mobile, shared: true });
+  };
+
+  const timestampFromPointer = (event) => {
+    const rect = overlay.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+    return timeline[nearestTimelineIndex(minX + ratio * (maxX - minX))];
+  };
+
+  overlay.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "touch") showSharedTimestamp(timestampFromPointer(event), event, false);
+  });
+  overlay.addEventListener("pointerleave", (event) => {
+    if (event.pointerType !== "touch") {
+      cursor.classList.remove("is-visible");
+      hideChartTooltip();
+    }
+  });
+  overlay.addEventListener("click", (event) => {
+    const mobile = event.detail > 0 && isCoarsePointer();
+    showSharedTimestamp(timestampFromPointer(event), event, mobile);
+  });
+  overlay.addEventListener("focus", () => {
+    if (!isCoarsePointer()) showSharedTimestamp(timeline[keyboardIndex], null, false);
+  });
+  overlay.addEventListener("blur", () => {
+    if (!isCoarsePointer()) {
+      cursor.classList.remove("is-visible");
+      hideChartTooltip();
+    }
+  });
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    keyboardIndex = Math.max(0, Math.min(timeline.length - 1, keyboardIndex + (event.key === "ArrowRight" ? 1 : -1)));
+    showSharedTimestamp(timeline[keyboardIndex], null, isCoarsePointer());
   });
   $("#series-legend").innerHTML = series.map(([name], index) => `<span class="legend-item"><i class="legend-swatch" style="background:${SERIES_COLORS[index % SERIES_COLORS.length]}"></i>${escapeHtml(name)}</span>`).join("");
   $("#trend-subtitle").textContent = `过滤后累计 · ${rows.length} 个结算点 · 北京时间`;
@@ -616,6 +758,11 @@ $("#refresh-interval").addEventListener("change", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") hideChartTooltip();
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (!event.target.closest("[data-bar]")) clearArmedBar(false);
+  if (!event.target.closest("[data-bar], #line-chart")) hideChartTooltip();
 });
 
 let resizeTimer;
