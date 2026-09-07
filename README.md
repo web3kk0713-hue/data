@@ -13,12 +13,15 @@
 - Hyperliquid：`POST /info`，请求类型 `fundingHistory`
 - 浏览器打开页面时优先直连官方 API。
 - GitHub Actions 每 15 分钟采集一次；出现新结算记录时把 `site/data/funding.json` 持久化回仓库并重新发布。
-- 官方 API 暂时不可用时按单一来源回退到最近成功快照，不影响其他来源继续更新。
+- 浏览器端遇到单一官方 API 暂时不可用时，会明确标注并回退到最近一次成功快照。
+- 自动发布采用失败关闭：五个官方数据源必须全部在线，并通过逐条时间戳/费率、重复记录、北京时间日界线、开休市归类、正负净汇总与累计路径对账；任何一项失败都会保留上一份已验证快照，不发布可疑数据。
+- 采集保留官方资金费率字符串，并使用十进制定点口径复算累计，前端统一显示到小数点后六位百分比。
 - 页面只读，没有交易、下单、钱包连接或管理入口。
 
 ## GitHub 上的完整服务结构
 
 - `scripts/build_snapshot.py`：采集、清洗、A 股时段归类和累计计算。
+- `scripts/audit_snapshot.py`：独立复算并与 Binance/Hyperliquid 官方数据逐条对账。
 - `site/data/funding.json`：仓库内持久化的数据快照。
 - `site/`：展示页面、样式、交互与公开配置。
 - `.github/workflows/pages.yml`：定时采集、数据入库和 GitHub Pages 发布。

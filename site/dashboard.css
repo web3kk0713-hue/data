@@ -188,13 +188,51 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: non
 .eyebrow { color: var(--pink-dark); font-size: 11px; font-weight: 720; letter-spacing: 0.16em; }
 :root[data-theme="dark"] .eyebrow { color: #ff6b9c; }
 
-.overview-controls { display: grid; grid-template-columns: minmax(236px, 1.3fr) minmax(172px, .7fr); align-items: end; gap: 12px; }
-.period-control, .metric-select-label, .filter-bar label, .settings-grid label { display: grid; gap: 6px; color: var(--secondary); font-size: 12px; }
-.period-control > small { min-height: 17px; color: var(--tertiary); }
-.period-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; min-height: 42px; padding: 3px; background: var(--track); border: 1px solid var(--line); border-radius: 13px; }
-.period-switch button { padding: 0 13px; color: var(--secondary); background: transparent; border: 0; border-radius: 10px; cursor: pointer; white-space: nowrap; transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease; }
-.period-switch button:hover { color: var(--ink); }
-.period-switch button.is-active { color: var(--ink); background: var(--panel-solid); box-shadow: 0 4px 14px rgba(41, 28, 45, 0.09); font-weight: 620; }
+.overview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 62px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  box-shadow: 0 8px 28px rgba(41, 28, 45, 0.045);
+}
+.control-cluster { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.control-label { color: var(--secondary); font-size: 11px; font-weight: 620; letter-spacing: 0.02em; white-space: nowrap; }
+.segmented-control {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(76px, auto);
+  gap: 3px;
+  min-height: 38px;
+  padding: 3px;
+  background: var(--track);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.segmented-control button {
+  min-height: 30px;
+  padding: 0 13px;
+  color: var(--secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.segmented-control button:hover { color: var(--ink); background: color-mix(in srgb, var(--panel-solid) 54%, transparent); }
+.segmented-control button:active { transform: scale(0.975); }
+.segmented-control button.is-active {
+  color: var(--panel-solid);
+  background: var(--ink);
+  box-shadow: 0 5px 15px rgba(20, 20, 23, 0.16);
+  font-weight: 640;
+}
+.toolbar-divider { width: 1px; height: 28px; background: var(--line); }
+.period-context { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; color: var(--secondary); font-size: 11px; white-space: nowrap; }
+.period-context::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--pink); box-shadow: 0 0 0 4px var(--pink-soft); }
+.filter-bar label, .settings-grid label { display: grid; gap: 6px; color: var(--secondary); font-size: 12px; }
 select {
   min-height: 42px;
   padding: 0 38px 0 14px;
@@ -204,7 +242,6 @@ select {
   border-radius: 13px;
   cursor: pointer;
 }
-.metric-select-label select { min-width: 172px; }
 
 .panel {
   min-width: 0;
@@ -413,9 +450,11 @@ tbody tr:hover { background: var(--track); }
   .view { padding-top: 26px; }
   .hero-row { align-items: stretch; flex-direction: column; gap: 18px; }
   .hero-row h1 { font-size: 36px; }
-  .overview-controls { width: 100%; }
-  .metric-select-label { width: 100%; }
-  .metric-select-label select { width: 100%; }
+  .overview-toolbar { display: grid; gap: 10px; padding: 12px; }
+  .control-cluster { display: grid; grid-template-columns: 70px minmax(0, 1fr); }
+  .segmented-control { grid-auto-columns: minmax(0, 1fr); }
+  .toolbar-divider { display: none; }
+  .period-context { margin-left: 80px; padding: 0 2px 2px; }
   .comparison-panel, .asset-card, .trend-panel, .table-panel { padding: 18px; }
   .bar-row { grid-template-columns: minmax(74px, 1fr) minmax(90px, 2fr); gap: 10px; }
   .bar-value { grid-column: 2; }
@@ -440,7 +479,8 @@ tbody tr:hover { background: var(--track); }
   .refresh-button { width: 40px; padding: 0; justify-content: center; }
   .hero-row { padding-inline: 3px; }
   .hero-row h1 { font-size: 32px; }
-  .overview-controls { grid-template-columns: 1fr; }
+  .control-cluster { grid-template-columns: 1fr; gap: 6px; }
+  .period-context { margin-left: 2px; }
   .comparison-panel, .asset-card, .trend-panel, .table-panel { padding: 15px; border-radius: 19px; }
   .panel-heading { align-items: flex-start; }
   .bar-row { grid-template-columns: 72px 1fr; padding-inline: 2px; }

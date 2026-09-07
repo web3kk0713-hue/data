@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#f5f5f7" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='11' fill='%231d1d1f'/%3E%3Ccircle cx='32' cy='8' r='6' fill='%23ff2670'/%3E%3Ccircle cx='56' cy='32' r='6' fill='%23ff2670'/%3E%3Ccircle cx='32' cy='56' r='6' fill='%23ff2670'/%3E%3Ccircle cx='8' cy='32' r='6' fill='%23ff2670'/%3E%3C/svg%3E" />
     <title>Funding Lens · 资金费率看板</title>
-    <link rel="stylesheet" href="./dashboard.css?v=20260907-1" />
+    <link rel="stylesheet" href="./dashboard.css?v=20260907-2" />
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -62,24 +62,26 @@
               <h1 id="overview-title">资金费率概览</h1>
               <p>优先查看北京时间当日累计，可切换各标的自 Binance 正式上线以来的累计结果。</p>
             </div>
-            <div class="overview-controls">
-              <div class="period-control">
-                <span>统计范围</span>
-                <div class="period-switch" role="group" aria-label="概览统计范围">
-                  <button class="is-active" type="button" data-period="today" aria-pressed="true">当日累计</button>
-                  <button type="button" data-period="all" aria-pressed="false">上线以来</button>
-                </div>
-                <small id="period-note">北京时间自然日</small>
+          </div>
+
+          <div class="overview-toolbar panel" aria-label="概览筛选">
+            <div class="control-cluster">
+              <span class="control-label">时间范围</span>
+              <div class="segmented-control period-switch" role="group" aria-label="概览统计范围">
+                <button class="is-active" type="button" data-period="today" aria-pressed="true">当日累计</button>
+                <button type="button" data-period="all" aria-pressed="false">上线以来</button>
               </div>
-              <label class="metric-select-label">
-                <span>显示指标</span>
-                <select id="overview-metric">
-                  <option value="net">净资费</option>
-                  <option value="positive">正资费</option>
-                  <option value="negative">负资费</option>
-                </select>
-              </label>
             </div>
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            <div class="control-cluster">
+              <span class="control-label">查看口径</span>
+              <div class="segmented-control metric-switch" role="group" aria-label="概览显示指标">
+                <button class="is-active" type="button" data-metric="net" aria-pressed="true">净资费</button>
+                <button type="button" data-metric="positive" aria-pressed="false">正资费</button>
+                <button type="button" data-metric="negative" aria-pressed="false">负资费</button>
+              </div>
+            </div>
+            <small class="period-context" id="period-note">北京时间自然日</small>
           </div>
 
           <section class="panel comparison-panel" aria-labelledby="comparison-title">
@@ -151,6 +153,6 @@
 
     <div class="chart-tooltip" id="chart-tooltip" role="status" aria-live="polite"></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./dashboard.js?v=20260907-1"></script>
+    <script type="module" src="./dashboard.js?v=20260907-2"></script>
   </body>
 </html>

@@ -4,6 +4,7 @@ const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)]
 const SERIES_COLORS = ["#ff2670", "#7916f3", "#00a7a7", "#8a9b00", "#d56b00"];
 const VENUE_ORDER = { Binance: 1, XYZ: 2, PARA: 3 };
 const PAGE_SIZE = 14;
+const RATE_SCALE = 1_000_000_000_000;
 const METRIC_META = {
   net: { label: "净资费", direction: "ALL" },
   positive: { label: "正资费", direction: "POS" },
@@ -63,13 +64,15 @@ function chinaDateKey(timestampMs) {
 function normalizeFundingRow(series, raw) {
   const timestampMs = Number(raw.fundingTime ?? raw.time);
   const session = classifyAShareSession(timestampMs);
+  const fundingRateRaw = String(raw.fundingRate);
   return {
     timestamp_ms: timestampMs,
     timestamp: new Date(timestampMs).toISOString(),
     asset: series.asset,
     venue: series.venue,
     contract: series.contract,
-    funding_rate: Number(raw.fundingRate),
+    funding_rate: Number(fundingRateRaw),
+    funding_rate_raw: fundingRateRaw,
     premium: raw.premium == null ? null : Number(raw.premium),
     mark_price: raw.markPrice == null ? null : Number(raw.markPrice),
     rate_type: raw.rateType ?? null,
@@ -77,6 +80,10 @@ function normalizeFundingRow(series, raw) {
     market_state: session.code,
     market_state_label: session.label,
   };
+}
+
+function addRate(left, right) {
+  return Math.round((Number(left) + Number(right)) * RATE_SCALE) / RATE_SCALE;
 }
 
 async function fetchBinanceHistory(series) {
@@ -131,14 +138,14 @@ function summarizeRows(rows) {
   rows.forEach((row) => {
     const key = row.session === "OPEN" ? "open" : "closed";
     if (row.funding_rate > 0) {
-      metrics.positive.total += row.funding_rate;
-      metrics.positive[key] += row.funding_rate;
+      metrics.positive.total = addRate(metrics.positive.total, row.funding_rate);
+      metrics.positive[key] = addRate(metrics.positive[key], row.funding_rate);
     } else if (row.funding_rate < 0) {
-      metrics.negative.total += row.funding_rate;
-      metrics.negative[key] += row.funding_rate;
+      metrics.negative.total = addRate(metrics.negative.total, row.funding_rate);
+      metrics.negative[key] = addRate(metrics.negative[key], row.funding_rate);
     }
-    metrics.net.total += row.funding_rate;
-    metrics.net[key] += row.funding_rate;
+    metrics.net.total = addRate(metrics.net.total, row.funding_rate);
+    metrics.net[key] = addRate(metrics.net[key], row.funding_rate);
   });
   return {
     count: rows.length,
@@ -157,9 +164,9 @@ function buildStaticPayload(records, sources) {
   ordered.forEach((row) => {
     const key = `${row.asset}|${row.venue}`;
     const value = running.get(key) || { positive: 0, negative: 0, net: 0 };
-    if (row.funding_rate > 0) value.positive += row.funding_rate;
-    if (row.funding_rate < 0) value.negative += row.funding_rate;
-    value.net += row.funding_rate;
+    if (row.funding_rate > 0) value.positive = addRate(value.positive, row.funding_rate);
+    if (row.funding_rate < 0) value.negative = addRate(value.negative, row.funding_rate);
+    value.net = addRate(value.net, row.funding_rate);
     running.set(key, value);
     row.cumulative_positive = value.positive;
     row.cumulative_negative = value.negative;
@@ -447,9 +454,13 @@ function activeRecordCount() {
 }
 
 function renderOverview() {
-  $("#overview-metric").value = state.metric;
   $$("[data-period]").forEach((button) => {
     const active = button.dataset.period === state.period;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $$("[data-metric]").forEach((button) => {
+    const active = button.dataset.metric === state.metric;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
@@ -605,9 +616,9 @@ function selectedRecords() {
   return [...filtered].sort((a, b) => a.timestamp_ms - b.timestamp_ms).map((row) => {
     const key = `${row.asset}|${row.venue}`;
     const value = running.get(key) || { positive: 0, negative: 0, net: 0 };
-    if (row.funding_rate > 0) value.positive += row.funding_rate;
-    if (row.funding_rate < 0) value.negative += row.funding_rate;
-    value.net += row.funding_rate;
+    if (row.funding_rate > 0) value.positive = addRate(value.positive, row.funding_rate);
+    if (row.funding_rate < 0) value.negative = addRate(value.negative, row.funding_rate);
+    value.net = addRate(value.net, row.funding_rate);
     running.set(key, value);
     return { ...row, view_positive: value.positive, view_negative: value.negative, view_net: value.net };
   });
@@ -823,10 +834,11 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", () => {
   if (button.dataset.view === "details") renderDetails();
 }));
 
-$("#overview-metric").addEventListener("change", (event) => {
-  state.metric = event.target.value;
+$$("[data-metric]").forEach((button) => button.addEventListener("click", () => {
+  state.metric = button.dataset.metric;
+  clearArmedBar(true);
   renderOverview();
-});
+}));
 
 $$('[data-period]').forEach((button) => button.addEventListener("click", () => {
   state.period = button.dataset.period;

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -161,13 +163,15 @@ def china_date(timestamp_ms: int) -> str:
 def normalize_row(series: FundingSeries, raw: dict[str, Any]) -> dict[str, Any]:
     timestamp_ms = int(raw.get("fundingTime", raw.get("time")))
     session = classify_a_share_session(timestamp_ms)
+    funding_rate_raw = str(raw["fundingRate"])
     return {
         "timestamp_ms": timestamp_ms,
         "timestamp": iso_utc(timestamp_ms),
         "asset": series.asset,
         "venue": series.venue,
         "contract": series.contract,
-        "funding_rate": float(raw["fundingRate"]),
+        "funding_rate": float(funding_rate_raw),
+        "funding_rate_raw": funding_rate_raw,
         "premium": None if raw.get("premium") is None else float(raw["premium"]),
         "mark_price": None if raw.get("markPrice") is None else float(raw["markPrice"]),
         "rate_type": raw.get("rateType"),
@@ -177,14 +181,18 @@ def normalize_row(series: FundingSeries, raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def metric_bucket() -> dict[str, float]:
-    return {"total": 0.0, "open": 0.0, "closed": 0.0}
+def metric_bucket() -> dict[str, Decimal]:
+    return {"total": Decimal("0"), "open": Decimal("0"), "closed": Decimal("0")}
+
+
+def rate_decimal(row: dict[str, Any]) -> Decimal:
+    return Decimal(str(row.get("funding_rate_raw", row["funding_rate"])))
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     metrics = {"positive": metric_bucket(), "negative": metric_bucket(), "net": metric_bucket()}
     for row in rows:
-        rate = row["funding_rate"]
+        rate = rate_decimal(row)
         session_key = "open" if row["session"] == "OPEN" else "closed"
         if rate > 0:
             metrics["positive"]["total"] += rate
@@ -194,11 +202,15 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             metrics["negative"][session_key] += rate
         metrics["net"]["total"] += rate
         metrics["net"][session_key] += rate
+    serialized_metrics = {
+        metric: {bucket: float(value) for bucket, value in values.items()}
+        for metric, values in metrics.items()
+    }
     return {
         "count": len(rows),
         "first_timestamp": rows[0]["timestamp"] if rows else None,
         "last_timestamp": rows[-1]["timestamp"] if rows else None,
-        "metrics": metrics,
+        "metrics": serialized_metrics,
     }
 
 
@@ -206,21 +218,21 @@ def build_payload(records: list[dict[str, Any]], sources: list[dict[str, Any]]) 
     generated_at = datetime.now(timezone.utc)
     today_date = generated_at.astimezone(CHINA_TZ).date().isoformat()
     records.sort(key=lambda row: (row["asset"], row["venue"], row["timestamp_ms"]))
-    cumulative: dict[tuple[str, str], dict[str, float]] = defaultdict(
-        lambda: {"positive": 0.0, "negative": 0.0, "net": 0.0}
+    cumulative: dict[tuple[str, str], dict[str, Decimal]] = defaultdict(
+        lambda: {"positive": Decimal("0"), "negative": Decimal("0"), "net": Decimal("0")}
     )
     by_series: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in records:
         values = cumulative[(row["asset"], row["venue"])]
-        rate = row["funding_rate"]
+        rate = rate_decimal(row)
         if rate > 0:
             values["positive"] += rate
         elif rate < 0:
             values["negative"] += rate
         values["net"] += rate
-        row["cumulative_positive"] = values["positive"]
-        row["cumulative_negative"] = values["negative"]
-        row["cumulative_net"] = values["net"]
+        row["cumulative_positive"] = float(values["positive"])
+        row["cumulative_negative"] = float(values["negative"])
+        row["cumulative_net"] = float(values["net"])
         by_series[(row["asset"], row["venue"])].append(row)
 
     assets = []
@@ -287,6 +299,13 @@ def load_existing_rows(series: FundingSeries) -> list[dict[str, Any]]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Build the official funding-rate snapshot")
+    parser.add_argument(
+        "--require-all-live",
+        action="store_true",
+        help="fail without replacing the published snapshot when any official source is unavailable",
+    )
+    args = parser.parse_args()
     existing_payload: dict[str, Any] | None = None
     if OUTPUT_PATH.exists():
         try:
@@ -322,6 +341,14 @@ def main() -> None:
                 "message": message,
             }
         )
+
+    unavailable = [
+        f"{source['asset']}/{source['venue']}: {source['message']}"
+        for source in sources
+        if source["mode"] != "live"
+    ]
+    if args.require_all_live and unavailable:
+        raise SystemExit("Official source validation failed; snapshot was not replaced:\n" + "\n".join(unavailable))
 
     if not records:
         raise SystemExit("No live data and no existing snapshot; refusing to publish an empty dashboard")

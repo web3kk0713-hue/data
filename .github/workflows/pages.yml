@@ -24,7 +24,10 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Refresh official funding snapshot
-        run: python scripts/build_snapshot.py
+        run: python scripts/build_snapshot.py --require-all-live
+
+      - name: Reconcile snapshot with official sources
+        run: python scripts/audit_snapshot.py --require-live --compare-live
 
       - name: Persist changed data in the repository
         if: github.ref == 'refs/heads/main'
