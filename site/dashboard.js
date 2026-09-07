@@ -5,9 +5,13 @@ const SERIES_COLORS = ["#ff2670", "#7916f3", "#00a7a7", "#8a9b00", "#d56b00"];
 const VENUE_ORDER = { Binance: 1, XYZ: 2, PARA: 3 };
 const PAGE_SIZE = 14;
 const METRIC_META = {
-  net: { label: "累计净资费", direction: "ALL" },
-  positive: { label: "累计正资费", direction: "POS" },
-  negative: { label: "累计负资费", direction: "NEG" },
+  net: { label: "净资费", direction: "ALL" },
+  positive: { label: "正资费", direction: "POS" },
+  negative: { label: "负资费", direction: "NEG" },
+};
+const PERIOD_META = {
+  today: { label: "当日累计", cellPrefix: "当日" },
+  all: { label: "上线以来累计", cellPrefix: "累计" },
 };
 
 const FUNDING_SERIES = [
@@ -46,6 +50,14 @@ function classifyAShareSession(timestampMs) {
   if (780 <= minute && minute < 897) return { code: "CONTINUOUS_PM", label: "下午连续竞价", isOpen: true };
   if (897 <= minute && minute < 900) return { code: "CLOSE_AUCTION", label: "收盘集合竞价", isOpen: true };
   return { code: "OFF_HOURS", label: "盘前/盘后休市", isOpen: false };
+}
+
+function chinaDateKey(timestampMs) {
+  const china = new Date(Number(timestampMs) + 8 * 60 * 60 * 1000);
+  const year = china.getUTCFullYear();
+  const month = String(china.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(china.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function normalizeFundingRow(series, raw) {
@@ -137,6 +149,8 @@ function summarizeRows(rows) {
 }
 
 function buildStaticPayload(records, sources) {
+  const generatedAt = new Date();
+  const todayDate = chinaDateKey(generatedAt.getTime());
   const ordered = [...records].sort((a, b) => a.asset.localeCompare(b.asset)
     || a.venue.localeCompare(b.venue) || a.timestamp_ms - b.timestamp_ms);
   const running = new Map();
@@ -159,16 +173,24 @@ function buildStaticPayload(records, sources) {
       listing_start: new Date(configured[0].listingStartMs).toISOString(),
       venues: configured.map((series) => {
         const rows = ordered.filter((row) => row.asset === asset && row.venue === series.venue);
-        return { venue: series.venue, contract: series.contract, ...summarizeRows(rows) };
+        const todayRows = rows.filter((row) => chinaDateKey(row.timestamp_ms) === todayDate);
+        return {
+          venue: series.venue,
+          contract: series.contract,
+          ...summarizeRows(rows),
+          today: summarizeRows(todayRows),
+        };
       }),
     };
   });
   const liveCount = sources.filter((source) => source.mode === "live").length;
   return {
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt.toISOString(),
     mode: liveCount === sources.length ? "live" : liveCount ? "mixed" : "snapshot",
     last_record_at: ordered.length ? new Date(Math.max(...ordered.map((row) => row.timestamp_ms))).toISOString() : null,
     record_count: ordered.length,
+    today_date: todayDate,
+    today_record_count: ordered.filter((row) => chinaDateKey(row.timestamp_ms) === todayDate).length,
     session_definition: {
       timezone: "Asia/Shanghai",
       classification: "settlement timestamp",
@@ -216,6 +238,7 @@ async function loadStaticDashboard() {
 const state = {
   data: null,
   view: "overview",
+  period: "today",
   metric: "net",
   asset: "ALL",
   venue: "ALL",
@@ -256,6 +279,7 @@ function isCoarsePointer() {
 function clearArmedBar(hideTooltip = false) {
   window.clearTimeout(armedBarTimer);
   if (armedBar) armedBar.removeAttribute("data-touch-armed");
+  $$('[data-bar-touch-detail]').forEach((detail) => detail.remove());
   armedBar = null;
   if (hideTooltip) hideChartTooltip();
 }
@@ -404,18 +428,49 @@ function flattenSummaries() {
   );
 }
 
+function emptySummary() {
+  const bucket = () => ({ total: 0, open: 0, closed: 0 });
+  return { count: 0, first_timestamp: null, last_timestamp: null, metrics: { positive: bucket(), negative: bucket(), net: bucket() } };
+}
+
+function activeVenueSummary(venue) {
+  return state.period === "today" ? (venue.today || emptySummary()) : venue;
+}
+
+function activeMetricLabel(metric = state.metric) {
+  return `${PERIOD_META[state.period].label}${METRIC_META[metric].label}`;
+}
+
+function activeRecordCount() {
+  if (state.period === "all") return state.data.record_count;
+  return state.data.today_record_count ?? state.data.records.filter((row) => chinaDateKey(row.timestamp_ms) === state.data.today_date).length;
+}
+
 function renderOverview() {
   $("#overview-metric").value = state.metric;
-  $("#record-count").textContent = `${state.data.record_count.toLocaleString("zh-CN")} 条结算`;
+  $$("[data-period]").forEach((button) => {
+    const active = button.dataset.period === state.period;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $("#period-note").textContent = state.period === "today" ? `${state.data.today_date} · 北京时间` : "各标的 Binance 正式上线起";
+  $("#comparison-title").textContent = `${PERIOD_META[state.period].label}跨场所比较`;
+  $("#comparison-subtitle").textContent = state.period === "today"
+    ? `${state.data.today_date} · 条长表示当日累计规模，数值保留正负方向。`
+    : "条长表示上线以来累计规模，数值保留正负方向。";
+  const recordCount = activeRecordCount();
+  $("#record-count").textContent = state.period === "today"
+    ? `${recordCount.toLocaleString("zh-CN")} 条今日结算`
+    : `${recordCount.toLocaleString("zh-CN")} 条累计结算`;
   const summaries = flattenSummaries();
-  const maxMagnitude = Math.max(...summaries.map((row) => Math.abs(row.metrics[state.metric].total)), 1e-12);
+  const maxMagnitude = Math.max(...summaries.map((row) => Math.abs(activeVenueSummary(row).metrics[state.metric].total)), 1e-12);
   const grouped = state.data.assets.map((asset) => {
     const rows = asset.venues.map((venue) => {
-      const metric = venue.metrics[state.metric];
+      const metric = activeVenueSummary(venue).metrics[state.metric];
       const width = Math.abs(metric.total) / maxMagnitude * 100;
       const tooltip = [
         `${asset.asset} · ${venue.venue}`,
-        `${METRIC_META[state.metric].label} ${formatPct(metric.total)}`,
+        `${activeMetricLabel()} ${formatPct(metric.total)}`,
         `开盘 ${formatPct(metric.open)} · 休市 ${formatPct(metric.closed)}`,
       ].join("\n");
       return `<button class="bar-row" type="button" data-bar data-asset="${escapeHtml(asset.asset)}" data-venue="${escapeHtml(venue.venue)}" data-tooltip="${escapeHtml(tooltip)}">
@@ -437,21 +492,26 @@ function renderOverview() {
 
 function renderAssetCard(asset) {
   const initials = asset.asset === "UNITREE" ? "UT" : "CX";
+  const periodPrefix = PERIOD_META[state.period].cellPrefix;
   const rows = [...asset.venues]
     .sort((a, b) => (VENUE_ORDER[a.venue] || 99) - (VENUE_ORDER[b.venue] || 99))
-    .map((venue) => `<button class="venue-summary-row" type="button" data-drill data-asset="${escapeHtml(asset.asset)}" data-venue="${escapeHtml(venue.venue)}">
-      <span class="venue-id"><strong>${escapeHtml(venue.venue)}</strong><small>${venue.count} 条 · ${escapeHtml(venue.contract)}</small></span>
-      ${renderMetricCell("正资费", venue.metrics.positive)}
-      ${renderMetricCell("负资费", venue.metrics.negative)}
-      ${renderMetricCell("净资费", venue.metrics.net)}
-      <svg class="row-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.3 5.3 16 12l-6.7 6.7-1.4-1.4 5.3-5.3-5.3-5.3 1.4-1.4Z" /></svg>
-    </button>`).join("");
+    .map((venue) => {
+      const summary = activeVenueSummary(venue);
+      return `<button class="venue-summary-row" type="button" data-drill data-asset="${escapeHtml(asset.asset)}" data-venue="${escapeHtml(venue.venue)}">
+        <span class="venue-id"><strong>${escapeHtml(venue.venue)}</strong><small>${summary.count} 条 · ${escapeHtml(venue.contract)}</small></span>
+        ${renderMetricCell(`${periodPrefix}正资费`, summary.metrics.positive)}
+        ${renderMetricCell(`${periodPrefix}负资费`, summary.metrics.negative)}
+        ${renderMetricCell(`${periodPrefix}净资费`, summary.metrics.net)}
+        <svg class="row-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.3 5.3 16 12l-6.7 6.7-1.4-1.4 5.3-5.3-5.3-5.3 1.4-1.4Z" /></svg>
+      </button>`;
+    }).join("");
+  const periodNote = state.period === "today" ? `当日 ${state.data.today_date}` : `统计起点 ${beijingDate(asset.listing_start)}`;
   return `<section class="panel asset-card" aria-labelledby="asset-${escapeHtml(asset.asset)}">
     <div class="asset-card-head">
-      <div class="asset-title"><span class="asset-symbol">${initials}</span><div><h2 id="asset-${escapeHtml(asset.asset)}">${escapeHtml(asset.asset)}</h2><p>统计起点 ${beijingDate(asset.listing_start)}</p></div></div>
+      <div class="asset-title"><span class="asset-symbol">${initials}</span><div><h2 id="asset-${escapeHtml(asset.asset)}">${escapeHtml(asset.asset)}</h2><p>${periodNote}</p></div></div>
       <span class="venue-count">${asset.venues.length} 个场所</span>
     </div>
-    <div class="venue-summary-head"><span>场所</span><span>累计正资费</span><span>累计负资费</span><span>累计净资费</span><span></span></div>
+    <div class="venue-summary-head"><span>场所</span><span>${periodPrefix}正资费</span><span>${periodPrefix}负资费</span><span>${periodPrefix}净资费</span><span></span></div>
     ${rows}
   </section>`;
 }
@@ -491,7 +551,7 @@ function bindBarInteractions() {
       clearArmedBar(false);
       armedBar = button;
       button.setAttribute("data-touch-armed", "true");
-      showChartTooltip(`${button.dataset.tooltip}\n再次点击进入详情`, event, button, { mobile: true });
+      button.insertAdjacentHTML("afterend", `<div class="bar-touch-detail" data-bar-touch-detail role="status">${escapeHtml(button.dataset.tooltip)}<small>再次点击该场所进入详情</small></div>`);
       armedBarTimer = window.setTimeout(() => clearArmedBar(true), 5000);
     });
   });
@@ -532,6 +592,7 @@ function syncVenueOptions() {
 
 function selectedRecords() {
   const filtered = state.data.records.filter((row) => {
+    if (state.period === "today" && chinaDateKey(row.timestamp_ms) !== state.data.today_date) return false;
     if (state.asset !== "ALL" && row.asset !== state.asset) return false;
     if (state.venue !== "ALL" && row.venue !== state.venue) return false;
     if (state.session !== "ALL" && row.session !== state.session) return false;
@@ -554,12 +615,19 @@ function selectedRecords() {
 
 function renderDetails() {
   if (!state.data) return;
+  $("#filter-period").value = state.period;
   $("#filter-asset").value = state.asset;
   syncVenueOptions();
   $("#filter-session").value = state.session;
   $("#filter-direction").value = state.direction;
   const rows = selectedRecords();
-  $("#details-subtitle").textContent = `${state.asset === "ALL" ? "全部标的" : state.asset} · ${state.venue === "ALL" ? "全部场所" : state.venue} · ${rows.length} 条结算`;
+  const periodLabel = state.period === "today" ? `当日 ${state.data.today_date}` : "上线以来";
+  $("#details-subtitle").textContent = `${periodLabel} · ${state.asset === "ALL" ? "全部标的" : state.asset} · ${state.venue === "ALL" ? "全部场所" : state.venue} · ${rows.length} 条结算`;
+  $("#trend-title").textContent = `${PERIOD_META[state.period].label}净资费路径`;
+  $("#column-positive").textContent = `${PERIOD_META[state.period].cellPrefix}正`;
+  $("#column-negative").textContent = `${PERIOD_META[state.period].cellPrefix}负`;
+  $("#column-net").textContent = `${PERIOD_META[state.period].cellPrefix}净`;
+  $("#trend-subtitle").textContent = `${PERIOD_META[state.period].label} · ${rows.length} 个结算点 · 北京时间`;
   renderLineChart(rows);
   renderTable(rows);
 }
@@ -567,7 +635,8 @@ function renderDetails() {
 function renderLineChart(rows) {
   const container = $("#line-chart");
   if (!rows.length) {
-    container.innerHTML = '<div class="empty-state">当前筛选没有结算记录。</div>';
+    const message = state.period === "today" ? `${state.data.today_date} 暂无符合条件的结算记录。` : "当前筛选没有结算记录。";
+    container.innerHTML = `<div class="empty-state">${escapeHtml(message)}</div>`;
     $("#series-legend").innerHTML = "";
     return;
   }
@@ -665,7 +734,8 @@ function renderLineChart(rows) {
         return;
       }
       const exact = latest.timestamp_ms === timestamp;
-      lines.push(`${name}  ${exact ? `本次 ${formatPct(latest.funding_rate)}` : "此刻无结算"}  · 净 ${formatPct(latest.view_net)}`);
+      const netLabel = state.period === "today" ? "日内净" : "累计净";
+      lines.push(`${name}  ${exact ? `本次 ${formatPct(latest.funding_rate)}` : "此刻无结算"}  · ${netLabel} ${formatPct(latest.view_net)}`);
       markers.push(`<circle class="shared-marker" cx="${cursorX}" cy="${y(latest.view_net)}" r="4" fill="${SERIES_COLORS[index % SERIES_COLORS.length]}"></circle>`);
     });
     markerLayer.innerHTML = markers.join("");
@@ -711,7 +781,6 @@ function renderLineChart(rows) {
     showSharedTimestamp(timeline[keyboardIndex], null, isCoarsePointer());
   });
   $("#series-legend").innerHTML = series.map(([name], index) => `<span class="legend-item"><i class="legend-swatch" style="background:${SERIES_COLORS[index % SERIES_COLORS.length]}"></i>${escapeHtml(name)}</span>`).join("");
-  $("#trend-subtitle").textContent = `过滤后累计 · ${rows.length} 个结算点 · 北京时间`;
 }
 
 function renderTable(rows) {
@@ -759,10 +828,18 @@ $("#overview-metric").addEventListener("change", (event) => {
   renderOverview();
 });
 
+$$('[data-period]').forEach((button) => button.addEventListener("click", () => {
+  state.period = button.dataset.period;
+  state.page = 1;
+  clearArmedBar(true);
+  renderOverview();
+  if (state.view === "details") renderDetails();
+}));
+
 $("#refresh-button").addEventListener("click", () => loadDashboard(true));
 $("#theme-toggle").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
 
-[["asset", "#filter-asset"], ["venue", "#filter-venue"], ["session", "#filter-session"], ["direction", "#filter-direction"]].forEach(([key, selector]) => {
+[["period", "#filter-period"], ["asset", "#filter-asset"], ["venue", "#filter-venue"], ["session", "#filter-session"], ["direction", "#filter-direction"]].forEach(([key, selector]) => {
   $(selector).addEventListener("change", (event) => {
     state[key] = event.target.value;
     if (key === "asset") syncVenueOptions();

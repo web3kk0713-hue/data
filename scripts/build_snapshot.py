@@ -149,6 +149,15 @@ def iso_utc(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
 
 
+def china_date(timestamp_ms: int) -> str:
+    return (
+        datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+        .astimezone(CHINA_TZ)
+        .date()
+        .isoformat()
+    )
+
+
 def normalize_row(series: FundingSeries, raw: dict[str, Any]) -> dict[str, Any]:
     timestamp_ms = int(raw.get("fundingTime", raw.get("time")))
     session = classify_a_share_session(timestamp_ms)
@@ -194,6 +203,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_payload(records: list[dict[str, Any]], sources: list[dict[str, Any]]) -> dict[str, Any]:
+    generated_at = datetime.now(timezone.utc)
+    today_date = generated_at.astimezone(CHINA_TZ).date().isoformat()
     records.sort(key=lambda row: (row["asset"], row["venue"], row["timestamp_ms"]))
     cumulative: dict[tuple[str, str], dict[str, float]] = defaultdict(
         lambda: {"positive": 0.0, "negative": 0.0, "net": 0.0}
@@ -218,7 +229,15 @@ def build_payload(records: list[dict[str, Any]], sources: list[dict[str, Any]]) 
         venues = []
         for series in configured:
             rows = by_series[(series.asset, series.venue)]
-            venues.append({"venue": series.venue, "contract": series.contract, **summarize(rows)})
+            today_rows = [row for row in rows if china_date(row["timestamp_ms"]) == today_date]
+            venues.append(
+                {
+                    "venue": series.venue,
+                    "contract": series.contract,
+                    **summarize(rows),
+                    "today": summarize(today_rows),
+                }
+            )
         assets.append(
             {
                 "asset": asset,
@@ -232,10 +251,14 @@ def build_payload(records: list[dict[str, Any]], sources: list[dict[str, Any]]) 
     mode = "live" if live_count == len(sources) else "mixed" if live_count else "snapshot"
     last_record_ms = max((row["timestamp_ms"] for row in records), default=None)
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at.isoformat(),
         "mode": mode,
         "last_record_at": iso_utc(last_record_ms) if last_record_ms else None,
         "record_count": len(records),
+        "today_date": today_date,
+        "today_record_count": sum(
+            china_date(row["timestamp_ms"]) == today_date for row in records
+        ),
         "session_definition": {
             "timezone": "Asia/Shanghai",
             "classification": "settlement timestamp",

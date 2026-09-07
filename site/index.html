@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#f5f5f7" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='11' fill='%231d1d1f'/%3E%3Ccircle cx='32' cy='8' r='6' fill='%23ff2670'/%3E%3Ccircle cx='56' cy='32' r='6' fill='%23ff2670'/%3E%3Ccircle cx='32' cy='56' r='6' fill='%23ff2670'/%3E%3Ccircle cx='8' cy='32' r='6' fill='%23ff2670'/%3E%3C/svg%3E" />
     <title>Funding Lens · 资金费率看板</title>
-    <link rel="stylesheet" href="./dashboard.css?v=20260825-4" />
+    <link rel="stylesheet" href="./dashboard.css?v=20260907-1" />
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -60,16 +60,26 @@
             <div>
               <span class="eyebrow">CROSS-VENUE FUNDING</span>
               <h1 id="overview-title">资金费率概览</h1>
-              <p>统一从各标的 Binance 正式上线时刻累计，区分 A 股交易与非交易时段。</p>
+              <p>优先查看北京时间当日累计，可切换各标的自 Binance 正式上线以来的累计结果。</p>
             </div>
-            <label class="metric-select-label">
-              <span>显示指标</span>
-              <select id="overview-metric">
-                <option value="net">累计净资费</option>
-                <option value="positive">累计正资费</option>
-                <option value="negative">累计负资费</option>
-              </select>
-            </label>
+            <div class="overview-controls">
+              <div class="period-control">
+                <span>统计范围</span>
+                <div class="period-switch" role="group" aria-label="概览统计范围">
+                  <button class="is-active" type="button" data-period="today" aria-pressed="true">当日累计</button>
+                  <button type="button" data-period="all" aria-pressed="false">上线以来</button>
+                </div>
+                <small id="period-note">北京时间自然日</small>
+              </div>
+              <label class="metric-select-label">
+                <span>显示指标</span>
+                <select id="overview-metric">
+                  <option value="net">净资费</option>
+                  <option value="positive">正资费</option>
+                  <option value="negative">负资费</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           <section class="panel comparison-panel" aria-labelledby="comparison-title">
@@ -93,6 +103,7 @@
           </div>
 
           <div class="filter-bar panel" aria-label="详情筛选">
+            <label><span>时间范围</span><select id="filter-period"><option value="today">当日累计</option><option value="all">上线以来</option></select></label>
             <label><span>标的</span><select id="filter-asset"><option value="ALL">全部</option><option value="CXMT">CXMT</option><option value="UNITREE">UNITREE</option></select></label>
             <label><span>场所</span><select id="filter-venue"><option value="ALL">全部</option></select></label>
             <label><span>A 股时段</span><select id="filter-session"><option value="ALL">全部</option><option value="OPEN">交易时段</option><option value="CLOSED">非交易时段</option></select></label>
@@ -114,7 +125,7 @@
             </div>
             <div class="table-scroll">
               <table>
-                <thead><tr><th>北京时间</th><th>标的</th><th>场所</th><th>A 股状态</th><th class="numeric">本次费率</th><th class="numeric">累计正</th><th class="numeric">累计负</th><th class="numeric">累计净</th></tr></thead>
+                <thead><tr><th>北京时间</th><th>标的</th><th>场所</th><th>A 股状态</th><th class="numeric">本次费率</th><th class="numeric" id="column-positive">当日正</th><th class="numeric" id="column-negative">当日负</th><th class="numeric" id="column-net">当日净</th></tr></thead>
                 <tbody id="funding-table-body"></tbody>
               </table>
             </div>
@@ -132,7 +143,7 @@
               <div><span>非交易时段</span><strong>09:25–09:30、午间、盘后、周末及休市日</strong></div>
             </div>
             <div class="source-status-list" id="source-status-list" aria-label="资金费率数据源状态"></div>
-            <p class="method-note">按资金费率结算时点归类，不代表整段费率计提窗口都发生在该时段。XYZ、PARA 是 Hyperliquid HIP-3 DEX 命名空间；底层数据提供商为 Binance 与 Hyperliquid。</p>
+            <p class="method-note">“当日”按北京时间自然日 00:00–23:59:59 统计，并按资金费率结算时点归类；不代表整段费率计提窗口都发生在该时段。XYZ、PARA 是 Hyperliquid HIP-3 DEX 命名空间；底层数据提供商为 Binance 与 Hyperliquid。</p>
           </details>
         </footer>
       </main>
@@ -140,6 +151,6 @@
 
     <div class="chart-tooltip" id="chart-tooltip" role="status" aria-live="polite"></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./dashboard.js?v=20260825-4"></script>
+    <script type="module" src="./dashboard.js?v=20260907-1"></script>
   </body>
 </html>
