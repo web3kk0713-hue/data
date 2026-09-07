@@ -305,6 +305,13 @@ def main() -> None:
         action="store_true",
         help="fail without replacing the published snapshot when any official source is unavailable",
     )
+    parser.add_argument(
+        "--require-live-provider",
+        action="append",
+        choices=("binance", "hyperliquid"),
+        default=[],
+        help="fail when a named provider is unavailable; may be repeated",
+    )
     args = parser.parse_args()
     existing_payload: dict[str, Any] | None = None
     if OUTPUT_PATH.exists():
@@ -336,18 +343,21 @@ def main() -> None:
                 "asset": series.asset,
                 "venue": series.venue,
                 "contract": series.contract,
+                "provider": series.provider,
                 "mode": mode,
                 "rows": len(rows),
                 "message": message,
             }
         )
 
+    required_providers = set(args.require_live_provider)
     unavailable = [
         f"{source['asset']}/{source['venue']}: {source['message']}"
         for source in sources
         if source["mode"] != "live"
+        and (args.require_all_live or source["provider"] in required_providers)
     ]
-    if args.require_all_live and unavailable:
+    if unavailable:
         raise SystemExit("Official source validation failed; snapshot was not replaced:\n" + "\n".join(unavailable))
 
     if not records:

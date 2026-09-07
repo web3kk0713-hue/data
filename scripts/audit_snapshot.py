@@ -192,9 +192,18 @@ def fetch_live_series(series: Series, end_ms: int) -> list[dict[str, Any]]:
     return [unique[key] for key in sorted(unique)]
 
 
-def audit_snapshot(path: Path, *, require_live: bool, compare_live: bool) -> dict[str, Any]:
+def audit_snapshot(
+    path: Path,
+    *,
+    require_live: bool,
+    compare_live: bool,
+    required_live_providers: set[str] | None = None,
+    compare_live_providers: set[str] | None = None,
+) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     errors: list[str] = []
+    required_live_providers = required_live_providers or set()
+    compare_live_providers = compare_live_providers or set()
     records = payload.get("records")
     add_error(errors, isinstance(records, list), "records must be a list")
     if not isinstance(records, list):
@@ -291,7 +300,7 @@ def audit_snapshot(path: Path, *, require_live: bool, compare_live: bool) -> dic
 
         source = source_map.get(key, {})
         add_error(errors, source.get("rows") == len(rows), f"source row count mismatch for {series.asset}/{series.venue}")
-        if require_live:
+        if require_live or series.provider in required_live_providers:
             add_error(errors, source.get("mode") == "live", f"{series.asset}/{series.venue} is not live")
         if rows:
             age_hours = (generated_ms - rows[-1]["timestamp_ms"]) / 3_600_000
@@ -309,14 +318,21 @@ def audit_snapshot(path: Path, *, require_live: bool, compare_live: bool) -> dic
             }
         )
 
-    if compare_live:
-        exchange_info = request_json("https://fapi.binance.com/fapi/v1/exchangeInfo")
-        onboard_dates = {
-            item["symbol"]: int(item["onboardDate"])
-            for item in exchange_info.get("symbols", [])
-            if item.get("symbol") in {"CXMTUSDT", "UNITREEUSDT"}
-        }
+    providers_to_compare = (
+        {series.provider for series in SERIES} if compare_live else compare_live_providers
+    )
+    if providers_to_compare:
+        onboard_dates: dict[str, int] = {}
+        if "binance" in providers_to_compare:
+            exchange_info = request_json("https://fapi.binance.com/fapi/v1/exchangeInfo")
+            onboard_dates = {
+                item["symbol"]: int(item["onboardDate"])
+                for item in exchange_info.get("symbols", [])
+                if item.get("symbol") in {"CXMTUSDT", "UNITREEUSDT"}
+            }
         for series in SERIES:
+            if series.provider not in providers_to_compare:
+                continue
             if series.provider == "binance":
                 add_error(errors, onboard_dates.get(series.contract) == series.listing_start_ms, f"official onboardDate changed for {series.contract}")
             official_rows = fetch_live_series(series, generated_ms)
@@ -348,10 +364,28 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
     parser.add_argument("--require-live", action="store_true")
     parser.add_argument("--compare-live", action="store_true")
+    parser.add_argument(
+        "--require-live-provider",
+        action="append",
+        choices=("binance", "hyperliquid"),
+        default=[],
+    )
+    parser.add_argument(
+        "--compare-live-provider",
+        action="append",
+        choices=("binance", "hyperliquid"),
+        default=[],
+    )
     args = parser.parse_args()
     print(
         json.dumps(
-            audit_snapshot(args.snapshot, require_live=args.require_live, compare_live=args.compare_live),
+            audit_snapshot(
+                args.snapshot,
+                require_live=args.require_live,
+                compare_live=args.compare_live,
+                required_live_providers=set(args.require_live_provider),
+                compare_live_providers=set(args.compare_live_provider),
+            ),
             ensure_ascii=False,
             indent=2,
         )
