@@ -6,14 +6,43 @@ const VENUE_ORDER = { Binance: 1, XYZ: 2, PARA: 3 };
 const PAGE_SIZE = 14;
 const RATE_SCALE = 1_000_000_000_000;
 const METRIC_META = {
-  net: { label: "净资费", direction: "ALL" },
-  positive: { label: "正资费", direction: "POS" },
-  negative: { label: "负资费", direction: "NEG" },
+  net: {
+    label: "净资费",
+    summaryLabel: "区间净资费",
+    definition: "净资费 = 所选区间内全部已结算费率之和。",
+    direction: "ALL",
+  },
+  positive: {
+    label: "正资费",
+    summaryLabel: "区间正资费",
+    definition: "正资费 = 所选区间内正费率之和。",
+    direction: "POS",
+  },
+  negative: {
+    label: "负资费",
+    summaryLabel: "区间负资费",
+    definition: "负资费 = 所选区间内负费率之和，并保留负号。",
+    direction: "NEG",
+  },
 };
 const PERIOD_META = {
   today: { label: "当日累计", cellPrefix: "当日" },
   all: { label: "上线以来累计", cellPrefix: "累计" },
 };
+const COMPARISON_VENUES = ["Binance", "XYZ"];
+const COMPARISON_VENUE_META = {
+  Binance: { color: "#ff2670" },
+  XYZ: { color: "#7916f3" },
+};
+const COMPARISON_RANGE_META = {
+  "24h": { label: "24小时", durationMs: 24 * 60 * 60 * 1000 },
+  "7d": { label: "7天", durationMs: 7 * 24 * 60 * 60 * 1000 },
+  "14d": { label: "14天", durationMs: 14 * 24 * 60 * 60 * 1000 },
+  all: { label: "上线以来", durationMs: null },
+  custom: { label: "自定义", durationMs: null },
+};
+const COMPARISON_RATE_SCALE = 1_000_000_000_000n;
+const COMPARISON_YEAR_MS = 365n * 24n * 60n * 60n * 1000n;
 
 const FUNDING_SERIES = [
   { asset: "CXMT", venue: "Binance", contract: "CXMTUSDT", listingStartMs: 1787029200000, provider: "binance" },
@@ -247,6 +276,12 @@ const state = {
   view: "overview",
   period: "today",
   metric: "net",
+  compareAsset: "CXMT",
+  compareRange: "7d",
+  compareCustomStartMs: null,
+  compareCustomEndMs: null,
+  compareTimeDraft: false,
+  compareTooltipPinned: false,
   asset: "ALL",
   venue: "ALL",
   session: "ALL",
@@ -414,8 +449,8 @@ async function loadDashboard(force = false) {
     if (force) showToast(`已刷新：${modeLabel}`);
   } catch (error) {
     setConnectionState("error", "连接失败", error.message);
-    $("#comparison-chart").innerHTML = `<div class="empty-state">${escapeHtml(error.message)}<br />请检查网络，或等待 GitHub 快照恢复。</div>`;
-    $("#asset-stack").innerHTML = "";
+    $("#comparison-summary").innerHTML = "";
+    $("#comparison-chart-stage").innerHTML = `<div class="chart-empty">${escapeHtml(error.message)}<br />请检查网络，或等待 GitHub 快照恢复。</div>`;
     showToast(error.message);
   } finally {
     setLoading(false);
@@ -453,7 +488,523 @@ function activeRecordCount() {
   return state.data.today_record_count ?? state.data.records.filter((row) => chinaDateKey(row.timestamp_ms) === state.data.today_date).length;
 }
 
+function comparisonRoundDiv(numerator, denominator) {
+  if (denominator === 0n) return 0n;
+  const negative = (numerator < 0n) !== (denominator < 0n);
+  const left = numerator < 0n ? -numerator : numerator;
+  const right = denominator < 0n ? -denominator : denominator;
+  const rounded = (left + right / 2n) / right;
+  return negative ? -rounded : rounded;
+}
+
+function comparisonDecimalToUnits(value) {
+  const text = String(value ?? "0").trim();
+  const match = text.match(/^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/);
+  if (!match) throw new Error(`无法解析资金费率：${text}`);
+  const sign = match[1] === "-" ? -1n : 1n;
+  const integer = match[2];
+  const fraction = match[3] || "";
+  const exponent = Number(match[4] || 0);
+  const digits = `${integer}${fraction}`.replace(/^0+(?=\d)/, "") || "0";
+  const decimalPlaces = fraction.length - exponent;
+  const units = decimalPlaces <= 12
+    ? BigInt(digits) * 10n ** BigInt(12 - decimalPlaces)
+    : comparisonRoundDiv(BigInt(digits), 10n ** BigInt(decimalPlaces - 12));
+  return sign * units;
+}
+
+function comparisonFormatUnitsPct(units, decimals = 6) {
+  const displayScale = 10n ** BigInt(decimals);
+  const scaled = comparisonRoundDiv(units * 100n * displayScale, COMPARISON_RATE_SCALE);
+  const negative = scaled < 0n;
+  const absolute = negative ? -scaled : scaled;
+  const whole = absolute / displayScale;
+  const fraction = String(absolute % displayScale).padStart(decimals, "0");
+  const sign = negative ? "-" : scaled > 0n ? "+" : "";
+  return `${sign}${whole}.${fraction}%`;
+}
+
+function comparisonFormatPp(units) {
+  return comparisonFormatUnitsPct(units).replace("%", " pp");
+}
+
+function comparisonUnitsToNumber(units) {
+  return Number(units) / Number(COMPARISON_RATE_SCALE);
+}
+
+function comparisonValueClass(units) {
+  if (units > 0n) return "is-positive";
+  if (units < 0n) return "is-negative";
+  return "";
+}
+
+function comparisonAnnualizedAt(units, startMs, timestampMs, eventCount) {
+  const durationMs = timestampMs - startMs;
+  if (durationMs < 24 * 60 * 60 * 1000 || eventCount < 1) return null;
+  return comparisonRoundDiv(units * COMPARISON_YEAR_MS, BigInt(Math.round(durationMs)));
+}
+
+function beijingDateTimeInput(timestampMs) {
+  const china = new Date(timestampMs + 8 * 60 * 60 * 1000);
+  const year = china.getUTCFullYear();
+  const month = String(china.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(china.getUTCDate()).padStart(2, "0");
+  const hour = String(china.getUTCHours()).padStart(2, "0");
+  const minute = String(china.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+function parseBeijingDateTime(value, inclusiveEnd = false) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second = "0"] = match;
+  const timestamp = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute), Number(second));
+  return Number.isFinite(timestamp) ? timestamp + (inclusiveEnd ? 999 : 0) : null;
+}
+
+function comparisonSourceFor(venue) {
+  return state.data.sources.find((source) => source.asset === state.compareAsset && source.venue === venue) || null;
+}
+
+function comparisonDataBounds() {
+  const venueBounds = COMPARISON_VENUES.map((venue) => {
+    const rows = state.data.records
+      .filter((row) => row.asset === state.compareAsset && row.venue === venue)
+      .sort((left, right) => left.timestamp_ms - right.timestamp_ms);
+    return { first: rows[0]?.timestamp_ms, last: rows.at(-1)?.timestamp_ms };
+  });
+  if (venueBounds.some((bound) => !Number.isFinite(bound.first) || !Number.isFinite(bound.last))) return null;
+  const listingStart = FUNDING_SERIES.find((series) => series.asset === state.compareAsset)?.listingStartMs;
+  return {
+    first: Number.isFinite(listingStart) ? listingStart : Math.max(...venueBounds.map((bound) => bound.first)),
+    last: Math.min(...venueBounds.map((bound) => bound.last)),
+  };
+}
+
+function comparisonWindow() {
+  const bounds = comparisonDataBounds();
+  if (!bounds) return null;
+  let start = bounds.first;
+  let end = bounds.last;
+  if (state.compareRange === "custom") {
+    start = Math.max(bounds.first, state.compareCustomStartMs ?? bounds.first);
+    end = Math.min(bounds.last, state.compareCustomEndMs ?? bounds.last);
+  } else {
+    const duration = COMPARISON_RANGE_META[state.compareRange].durationMs;
+    if (duration != null) start = Math.max(bounds.first, end - duration);
+  }
+  if (start >= end) return null;
+  return { start, end, hours: (end - start) / 3_600_000 };
+}
+
+function buildComparisonSeries(venue, selectedWindow) {
+  const rows = state.data.records
+    .filter((row) => row.asset === state.compareAsset
+      && row.venue === venue
+      && row.timestamp_ms >= selectedWindow.start
+      && row.timestamp_ms <= selectedWindow.end)
+    .sort((left, right) => left.timestamp_ms - right.timestamp_ms);
+  let positive = 0n;
+  let negative = 0n;
+  let net = 0n;
+  let count = 0;
+  const points = [{ timestamp_ms: selectedWindow.start, positive, negative, net, count, event: null }];
+  rows.forEach((row) => {
+    const rateUnits = comparisonDecimalToUnits(row.funding_rate_raw ?? row.funding_rate);
+    if (rateUnits > 0n) positive += rateUnits;
+    if (rateUnits < 0n) negative += rateUnits;
+    net += rateUnits;
+    count += 1;
+    points.push({ timestamp_ms: row.timestamp_ms, positive, negative, net, count, event: row });
+  });
+  if (points.at(-1).timestamp_ms < selectedWindow.end) {
+    points.push({ timestamp_ms: selectedWindow.end, positive, negative, net, count, event: null, extension: true });
+  }
+  const selectedUnits = { positive, negative, net }[state.metric];
+  return {
+    venue,
+    color: COMPARISON_VENUE_META[venue].color,
+    rows,
+    points,
+    positive,
+    negative,
+    net,
+    selectedUnits,
+    annualizedUnits: comparisonAnnualizedAt(selectedUnits, selectedWindow.start, selectedWindow.end, count),
+    source: comparisonSourceFor(venue),
+  };
+}
+
+function currentComparisonView() {
+  const selectedWindow = comparisonWindow();
+  if (!selectedWindow) return null;
+  return { window: selectedWindow, series: COMPARISON_VENUES.map((venue) => buildComparisonSeries(venue, selectedWindow)) };
+}
+
+function renderComparisonSummary(view) {
+  const summaryHtml = (series) => {
+    const sourceLabel = series.source?.mode === "live" ? "在线" : "快照回退";
+    const annualized = series.annualizedUnits == null ? "—" : comparisonFormatUnitsPct(series.annualizedUnits, 2);
+    return `<article class="venue-summary" style="--venue-color:${series.color}">
+      <div class="venue-identity">
+        <div class="venue-name"><i></i><strong>${series.venue}</strong></div>
+        <small>${series.rows.length} 次结算 · ${sourceLabel}</small>
+      </div>
+      <div class="summary-metric">
+        <span>${METRIC_META[state.metric].summaryLabel}</span>
+        <strong class="${comparisonValueClass(series.selectedUnits)}">${comparisonFormatUnitsPct(series.selectedUnits)}</strong>
+        <small>${beijingDate(view.window.start)} 起</small>
+      </div>
+      <div class="summary-metric">
+        <span>年化</span>
+        <strong class="${series.annualizedUnits == null ? "" : comparisonValueClass(series.annualizedUnits)}">${annualized}</strong>
+      </div>
+    </article>`;
+  };
+  const [binance, xyz] = view.series;
+  const spread = xyz.selectedUnits - binance.selectedUnits;
+  $("#comparison-summary").innerHTML = `${summaryHtml(binance)}
+    <div class="spread-summary">
+      <span>XYZ − Binance</span>
+      <strong class="${comparisonValueClass(spread)}">${comparisonFormatPp(spread)}</strong>
+      <small>${METRIC_META[state.metric].label}场所差</small>
+    </div>
+    ${summaryHtml(xyz)}`;
+}
+
+function comparisonNiceDomain(values) {
+  let min = Math.min(0, ...values);
+  let max = Math.max(0, ...values);
+  if (min === max) {
+    min -= 0.00001;
+    max += 0.00001;
+  }
+  const span = max - min;
+  return { min: min - span * 0.09, max: max + span * 0.09 };
+}
+
+function comparisonStepPath(points, metric, x, y) {
+  return points.map((point, index) => {
+    const pointX = x(point.timestamp_ms).toFixed(2);
+    const pointY = y(comparisonUnitsToNumber(point[metric])).toFixed(2);
+    return index === 0 ? `M${pointX},${pointY}` : `H${pointX}V${pointY}`;
+  }).join(" ");
+}
+
+function comparisonRealTail(points, metric, x, y) {
+  const latestIndex = points.findLastIndex((point) => point.event);
+  if (latestIndex < 1) return "";
+  const previous = points[latestIndex - 1];
+  const latest = points[latestIndex];
+  return `M${x(previous.timestamp_ms).toFixed(2)},${y(comparisonUnitsToNumber(previous[metric])).toFixed(2)} H${x(latest.timestamp_ms).toFixed(2)} V${y(comparisonUnitsToNumber(latest[metric])).toFixed(2)}`;
+}
+
+function comparisonPlaceEndLabels(series, metric, y, top, bottom) {
+  const labels = series.map((item) => ({ item, y: y(comparisonUnitsToNumber(item.points.at(-1)[metric])) }));
+  labels.sort((left, right) => left.y - right.y);
+  const minimumGap = 25;
+  labels.forEach((label, index) => {
+    label.labelY = Math.max(top + 12, label.y);
+    if (index > 0) label.labelY = Math.max(label.labelY, labels[index - 1].labelY + minimumGap);
+  });
+  for (let index = labels.length - 1; index >= 0; index -= 1) {
+    const maximumY = bottom - 12 - (labels.length - 1 - index) * minimumGap;
+    labels[index].labelY = Math.min(labels[index].labelY, maximumY);
+  }
+  return labels;
+}
+
+function latestComparisonPointAt(points, timestamp) {
+  let low = 0;
+  let high = points.length - 1;
+  let found = points[0];
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (points[middle].timestamp_ms <= timestamp) {
+      found = points[middle];
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
+function nearestComparisonIndex(timeline, target) {
+  let low = 0;
+  let high = timeline.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (timeline[middle] < target) low = middle + 1;
+    else high = middle;
+  }
+  if (low > 0 && Math.abs(timeline[low - 1] - target) <= Math.abs(timeline[low] - target)) return low - 1;
+  return low;
+}
+
+function positionComparisonTooltip(tooltip, event, anchor) {
+  const viewportGap = 12;
+  const anchorRect = anchor.getBoundingClientRect();
+  const pointX = event?.clientX ?? (anchorRect.left + anchorRect.width * 0.62);
+  const pointY = event?.clientY ?? (anchorRect.top + 28);
+  let left = pointX + 14;
+  let top = pointY + 14;
+  const rect = tooltip.getBoundingClientRect();
+  if (left + rect.width > window.innerWidth - viewportGap) left = pointX - rect.width - 14;
+  if (top + rect.height > window.innerHeight - viewportGap) top = pointY - rect.height - 14;
+  tooltip.style.left = `${Math.max(viewportGap, Math.min(left, window.innerWidth - rect.width - viewportGap))}px`;
+  tooltip.style.top = `${Math.max(viewportGap, Math.min(top, window.innerHeight - rect.height - viewportGap))}px`;
+}
+
+function showComparisonTooltip(timestamp, observations, event, anchor, selectedWindow) {
+  const tooltip = $("#comparison-tooltip");
+  const spread = observations[1].units - observations[0].units;
+  tooltip.innerHTML = `<div class="comparison-tooltip-time">${beijingDate(timestamp, true)}</div>
+    ${observations.map(({ series, point, units }) => {
+      const annualized = comparisonAnnualizedAt(units, selectedWindow.start, timestamp, point.count);
+      return `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
+        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span><small>年化 ${annualized == null ? "—" : comparisonFormatUnitsPct(annualized, 2)}</small></div>
+        <strong>${comparisonFormatUnitsPct(units)}</strong>
+      </div>`;
+    }).join("")}
+    <div class="comparison-tooltip-spread"><span>XYZ − Binance</span><strong>${comparisonFormatPp(spread)}</strong></div>`;
+  tooltip.classList.add("is-visible");
+  positionComparisonTooltip(tooltip, event, anchor);
+}
+
+function hideComparisonTooltip(cursor = null) {
+  $("#comparison-tooltip").classList.remove("is-visible");
+  cursor?.classList.remove("is-visible");
+}
+
+function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
+  const overlay = $("[data-comparison-overlay]", container);
+  const cursor = $("[data-comparison-cursor]", container);
+  const crosshair = $(".comparison-chart-crosshair", cursor);
+  const markerLayer = $("[data-comparison-markers]", cursor);
+  let keyboardIndex = timeline.length - 1;
+
+  const show = (timestamp, event = null, pin = false) => {
+    const cursorX = x(timestamp);
+    crosshair.setAttribute("x1", cursorX);
+    crosshair.setAttribute("x2", cursorX);
+    const observations = view.series.map((series) => {
+      const point = latestComparisonPointAt(series.points, timestamp);
+      return { series, point, units: point[state.metric] };
+    });
+    markerLayer.innerHTML = observations.map(({ series, point }) => `<circle class="comparison-shared-marker" cx="${cursorX}" cy="${y(comparisonUnitsToNumber(point[state.metric]))}" r="4" fill="${series.color}" />`).join("");
+    cursor.classList.add("is-visible");
+    keyboardIndex = timeline.indexOf(timestamp);
+    overlay.setAttribute("aria-valuenow", String(keyboardIndex));
+    overlay.setAttribute("aria-valuetext", observations.map(({ series, units }) => `${series.venue} ${comparisonFormatUnitsPct(units)}`).join("；"));
+    showComparisonTooltip(timestamp, observations, event, overlay, view.window);
+    if (pin) state.compareTooltipPinned = true;
+  };
+
+  const timestampFromPointer = (event) => {
+    const rect = overlay.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+    return timeline[nearestComparisonIndex(timeline, view.window.start + ratio * (view.window.end - view.window.start))];
+  };
+
+  overlay.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "touch" && !state.compareTooltipPinned) show(timestampFromPointer(event), event, false);
+  });
+  overlay.addEventListener("pointerleave", (event) => {
+    if (event.pointerType !== "touch" && !state.compareTooltipPinned) hideComparisonTooltip(cursor);
+  });
+  overlay.addEventListener("click", (event) => {
+    state.compareTooltipPinned = !state.compareTooltipPinned;
+    show(timestampFromPointer(event), event, state.compareTooltipPinned);
+  });
+  overlay.addEventListener("focus", () => show(timeline[keyboardIndex], null, false));
+  overlay.addEventListener("blur", () => {
+    if (!state.compareTooltipPinned) hideComparisonTooltip(cursor);
+  });
+  overlay.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Escape"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Escape") {
+      state.compareTooltipPinned = false;
+      hideComparisonTooltip(cursor);
+      return;
+    }
+    keyboardIndex = Math.max(0, Math.min(timeline.length - 1, keyboardIndex + (event.key === "ArrowRight" ? 1 : -1)));
+    show(timeline[keyboardIndex], null, false);
+  });
+}
+
+function renderComparisonChart(view) {
+  const container = $("#comparison-chart-stage");
+  if (view.series.every((series) => series.rows.length === 0)) {
+    container.innerHTML = '<div class="chart-empty">所选共同区间内暂无结算记录。</div>';
+    $("#latest-key").classList.remove("is-live");
+    return;
+  }
+  const width = Math.max(340, Math.round(container.clientWidth || 1100));
+  const compact = width < 680;
+  const height = compact ? 300 : 410;
+  const margin = compact
+    ? { top: 24, right: 14, bottom: 38, left: 70 }
+    : { top: 26, right: 126, bottom: 42, left: 88 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const { start, end } = view.window;
+  const values = view.series.flatMap((series) => series.points.map((point) => comparisonUnitsToNumber(point[state.metric])));
+  const domain = comparisonNiceDomain(values);
+  const x = (timestamp) => margin.left + (timestamp - start) / (end - start) * plotWidth;
+  const y = (value) => margin.top + (domain.max - value) / (domain.max - domain.min) * plotHeight;
+  const tickValues = Array.from({ length: 5 }, (_, index) => domain.min + (domain.max - domain.min) * index / 4);
+  const grids = tickValues.map((tick) => `<line class="comparison-chart-grid" x1="${margin.left}" y1="${y(tick)}" x2="${width - margin.right}" y2="${y(tick)}" />
+    <text class="comparison-chart-axis" x="${margin.left - 11}" y="${y(tick) + 3}" text-anchor="end">${comparisonFormatUnitsPct(BigInt(Math.round(tick * Number(COMPARISON_RATE_SCALE))), 6)}</text>`).join("");
+  const zeroLine = domain.min <= 0 && domain.max >= 0
+    ? `<line class="comparison-chart-zero" x1="${margin.left}" y1="${y(0)}" x2="${width - margin.right}" y2="${y(0)}" />`
+    : "";
+  const bounds = comparisonDataBounds();
+  const reachesLatest = bounds && Math.abs(view.window.end - bounds.last) < 60_000;
+  const paths = view.series.map((series) => {
+    const latestReal = series.points.findLast((point) => point.event);
+    const pulse = Boolean(latestReal && reachesLatest && series.source?.mode === "live");
+    if (!latestReal) return `<path class="comparison-chart-line" d="${comparisonStepPath(series.points, state.metric, x, y)}" stroke="${series.color}" />`;
+    const pointX = x(latestReal.timestamp_ms);
+    const pointY = y(comparisonUnitsToNumber(latestReal[state.metric]));
+    return `<path class="comparison-chart-line" d="${comparisonStepPath(series.points, state.metric, x, y)}" stroke="${series.color}" />
+      <path class="comparison-chart-tail${pulse ? " is-live" : ""}" d="${comparisonRealTail(series.points, state.metric, x, y)}" stroke="${series.color}" style="--tail-color:${series.color}" />
+      <circle class="comparison-latest-halo${pulse ? " is-live" : ""}" cx="${pointX}" cy="${pointY}" r="7" style="--point-color:${series.color}" />
+      <circle class="comparison-latest-dot" cx="${pointX}" cy="${pointY}" r="4" style="--point-color:${series.color}" />`;
+  }).join("");
+  $("#latest-key").classList.toggle("is-live", Boolean(reachesLatest && view.series.some((series) => series.source?.mode === "live")));
+  const labelPlacements = compact ? [] : comparisonPlaceEndLabels(view.series, state.metric, y, margin.top, height - margin.bottom);
+  const endLabels = labelPlacements.map(({ item, y: actualY, labelY }) => {
+    const labelX = width - margin.right + 12;
+    const value = item.points.at(-1)[state.metric];
+    return `<path d="M${width - margin.right + 2},${actualY} L${labelX - 4},${labelY}" stroke="${item.color}" stroke-opacity=".42" fill="none" />
+      <rect class="comparison-label-bg" x="${labelX}" y="${labelY - 11}" width="106" height="22" rx="7" style="--label-color:${item.color}" />
+      <text class="comparison-end-label" x="${labelX + 8}" y="${labelY + 3}">${item.venue} ${comparisonFormatUnitsPct(value)}</text>`;
+  }).join("");
+  const tickCount = compact ? 3 : 5;
+  const xTicks = Array.from({ length: tickCount }, (_, index) => start + (end - start) * index / (tickCount - 1));
+  const xLabels = xTicks.map((tick, index) => `<text class="comparison-chart-axis" x="${x(tick)}" y="${height - 12}" text-anchor="${index === 0 ? "start" : index === tickCount - 1 ? "end" : "middle"}">${beijingDate(tick).slice(5, 16)}</text>`).join("");
+  const timeline = [...new Set([start, end, ...view.series.flatMap((series) => series.rows.map((row) => row.timestamp_ms))])].sort((left, right) => left - right);
+  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="comparison-svg-title comparison-svg-desc">
+    <title id="comparison-svg-title">${state.compareAsset} ${METRIC_META[state.metric].label}场所对比</title>
+    <desc id="comparison-svg-desc">Binance 与 XYZ 在共同时间区间的阶梯累计曲线。</desc>
+    ${grids}${zeroLine}${paths}${endLabels}${xLabels}
+    <g class="comparison-shared-cursor" data-comparison-cursor aria-hidden="true">
+      <line class="comparison-chart-crosshair" y1="${margin.top}" y2="${height - margin.bottom}" />
+      <g data-comparison-markers></g>
+    </g>
+    <rect class="comparison-chart-overlay" data-comparison-overlay x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}" tabindex="0" role="slider" aria-label="共享时间游标" aria-valuemin="0" aria-valuemax="${timeline.length - 1}" aria-valuenow="${timeline.length - 1}" />
+  </svg>`;
+  bindComparisonChartInteractions({ container, view, timeline, x, y });
+}
+
+function clearComparisonTimeError() {
+  const error = $("#range-error");
+  error.hidden = true;
+  error.textContent = "";
+  [$("#range-start"), $("#range-end")].forEach((input) => input.setAttribute("aria-invalid", "false"));
+}
+
+function showComparisonTimeError(message) {
+  const error = $("#range-error");
+  error.textContent = message;
+  error.hidden = false;
+  [$("#range-start"), $("#range-end")].forEach((input) => input.setAttribute("aria-invalid", "true"));
+}
+
+function syncComparisonTimeInputs(selectedWindow) {
+  const bounds = comparisonDataBounds();
+  if (!bounds) return;
+  const startInput = $("#range-start");
+  const endInput = $("#range-end");
+  startInput.min = beijingDateTimeInput(bounds.first);
+  endInput.min = beijingDateTimeInput(bounds.first);
+  startInput.max = beijingDateTimeInput(bounds.last);
+  endInput.max = beijingDateTimeInput(bounds.last);
+  if (!state.compareTimeDraft) {
+    startInput.value = beijingDateTimeInput(selectedWindow.start);
+    endInput.value = beijingDateTimeInput(selectedWindow.end);
+  }
+}
+
+function markComparisonTimeDraft() {
+  state.compareTimeDraft = true;
+  $$('[data-range]').forEach((button) => {
+    button.classList.remove("is-active");
+    button.setAttribute("aria-pressed", "false");
+  });
+  $("#range-context").textContent = "自定义时段 · 北京时间";
+  clearComparisonTimeError();
+}
+
+function commitComparisonTimeWindow() {
+  const start = parseBeijingDateTime($("#range-start").value, false);
+  const end = parseBeijingDateTime($("#range-end").value, true);
+  const bounds = comparisonDataBounds();
+  if (!start || !end || !bounds) {
+    showComparisonTimeError("请选择完整的开始和结束时间");
+    return;
+  }
+  if (start < bounds.first || end > bounds.last + 999) {
+    showComparisonTimeError("时间超出两个场所的可比较范围");
+    return;
+  }
+  if (start >= end) {
+    showComparisonTimeError("开始时间必须早于结束时间");
+    return;
+  }
+  clearComparisonTimeError();
+  state.compareCustomStartMs = start;
+  state.compareCustomEndMs = end;
+  state.compareRange = "custom";
+  state.compareTimeDraft = false;
+  renderOverview();
+}
+
 function renderOverview() {
+  if (!state.data) return;
+  state.compareTooltipPinned = false;
+  hideComparisonTooltip();
+  $$('[data-compare-asset]').forEach((button) => {
+    const active = button.dataset.compareAsset === state.compareAsset;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $$('[data-metric]').forEach((button) => {
+    const active = button.dataset.metric === state.metric;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $$('[data-range]').forEach((button) => {
+    const active = !state.compareTimeDraft && button.dataset.range === state.compareRange;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const view = currentComparisonView();
+  $("#comparison-title").textContent = `${state.compareAsset} · 场所费率对比`;
+  $("#comparison-chart-heading").textContent = `累计${METRIC_META[state.metric].label}路径`;
+  $("#metric-definition").textContent = METRIC_META[state.metric].definition;
+  if (!view) {
+    $("#comparison-summary").innerHTML = "";
+    $("#comparison-chart-stage").innerHTML = '<div class="chart-empty">两个场所没有可比较的时间区间。</div>';
+    $("#record-count").textContent = "0 条结算";
+    $("#latest-key").classList.remove("is-live");
+    showComparisonTimeError("该时段没有可比较数据");
+    return;
+  }
+  $("#range-context").textContent = state.compareTimeDraft
+    ? "自定义时段 · 北京时间"
+    : `${COMPARISON_RANGE_META[state.compareRange].label}${state.compareRange === "custom" ? "时段" : ""} · 北京时间`;
+  syncComparisonTimeInputs(view.window);
+  $("#comparison-subtitle").textContent = `${beijingDate(view.window.start)} 至 ${beijingDate(view.window.end)} · 从区间起点重新累计`;
+  $("#comparison-chart-subtitle").textContent = "共同时间窗口 · 北京时间";
+  $("#record-count").textContent = `${view.series.reduce((total, series) => total + series.rows.length, 0)} 条结算`;
+  renderComparisonSummary(view);
+  renderComparisonChart(view);
+}
+
+function renderLegacyOverview() {
   $$("[data-period]").forEach((button) => {
     const active = button.dataset.period === state.period;
     button.classList.toggle("is-active", active);
@@ -582,6 +1133,8 @@ function drillDown(asset, venue, direction = "ALL") {
 function setView(view) {
   state.view = view;
   clearArmedBar(true);
+  state.compareTooltipPinned = false;
+  hideComparisonTooltip();
   $("#overview-view").hidden = view !== "overview";
   $("#details-view").hidden = view !== "details";
   $$('[data-view]').forEach((button) => {
@@ -832,7 +1385,30 @@ function scheduleRefresh() {
 $$('[data-view]').forEach((button) => button.addEventListener("click", () => {
   setView(button.dataset.view);
   if (button.dataset.view === "details") renderDetails();
+  else renderOverview();
 }));
+
+$$('[data-compare-asset]').forEach((button) => button.addEventListener("click", () => {
+  state.compareAsset = button.dataset.compareAsset;
+  state.compareTimeDraft = false;
+  clearComparisonTimeError();
+  renderOverview();
+}));
+
+$$('[data-range]').forEach((button) => button.addEventListener("click", () => {
+  state.compareRange = button.dataset.range;
+  state.compareTimeDraft = false;
+  clearComparisonTimeError();
+  renderOverview();
+}));
+
+[$("#range-start"), $("#range-end")].forEach((input) => {
+  input.addEventListener("input", markComparisonTimeDraft);
+  input.addEventListener("change", commitComparisonTimeWindow);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") commitComparisonTimeWindow();
+  });
+});
 
 $$("[data-metric]").forEach((button) => button.addEventListener("click", () => {
   state.metric = button.dataset.metric;
@@ -876,12 +1452,20 @@ $("#refresh-interval").addEventListener("change", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") hideChartTooltip();
+  if (event.key === "Escape") {
+    state.compareTooltipPinned = false;
+    hideComparisonTooltip($("[data-comparison-cursor]"));
+    hideChartTooltip();
+  }
 });
 
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("[data-bar]")) clearArmedBar(false);
   if (!event.target.closest("[data-bar], #line-chart")) hideChartTooltip();
+  if (!event.target.closest("#comparison-chart-stage, #comparison-tooltip")) {
+    state.compareTooltipPinned = false;
+    hideComparisonTooltip($("[data-comparison-cursor]"));
+  }
 });
 
 let resizeTimer;
@@ -889,6 +1473,10 @@ window.addEventListener("resize", () => {
   window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
     if (state.view === "details" && state.data) renderLineChart(selectedRecords());
+    if (state.view === "overview" && state.data) {
+      const view = currentComparisonView();
+      if (view) renderComparisonChart(view);
+    }
   }, 120);
 });
 
