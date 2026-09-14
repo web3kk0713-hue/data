@@ -18,6 +18,10 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PATH = ROOT / "site" / "data" / "funding.json"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
+BINANCE_FUTURES_API_BASES = (
+    "https://fapi.binance.com",
+    "https://www.binance.com",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,12 +83,22 @@ def request_json(
     raise RuntimeError(f"request failed after {attempts} attempts: {last_error}")
 
 
+def request_binance_json(path: str, query: str) -> Any:
+    errors: list[str] = []
+    for base_url in BINANCE_FUTURES_API_BASES:
+        try:
+            return request_json(f"{base_url}{path}?{query}")
+        except Exception as exc:
+            errors.append(f"{base_url}: {exc}")
+    raise RuntimeError("all official Binance futures endpoints failed: " + " | ".join(errors))
+
+
 def fetch_binance(series: FundingSeries) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     cursor = series.listing_start_ms
     for _ in range(50):
         query = urlencode({"symbol": series.contract, "startTime": cursor, "limit": 1000})
-        page = request_json(f"https://fapi.binance.com/fapi/v1/fundingRate?{query}")
+        page = request_binance_json("/fapi/v1/fundingRate", query)
         if not isinstance(page, list):
             raise ValueError("Binance returned a non-list payload")
         rows.extend(page)

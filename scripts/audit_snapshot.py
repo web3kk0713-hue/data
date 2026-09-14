@@ -28,6 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SNAPSHOT = ROOT / "site" / "data" / "funding.json"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 DECIMAL_TOLERANCE = Decimal("0.000000000000005")
+BINANCE_FUTURES_API_BASES = (
+    "https://fapi.binance.com",
+    "https://www.binance.com",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +83,17 @@ def request_json(url: str, *, payload: dict[str, Any] | None = None) -> Any:
             if attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"official source request failed: {last_error}")
+
+
+def request_binance_json(path: str, query: str | None = None) -> Any:
+    suffix = path if query is None else f"{path}?{query}"
+    errors: list[str] = []
+    for base_url in BINANCE_FUTURES_API_BASES:
+        try:
+            return request_json(f"{base_url}{suffix}")
+        except Exception as exc:
+            errors.append(f"{base_url}: {exc}")
+    raise RuntimeError("all official Binance futures endpoints failed: " + " | ".join(errors))
 
 
 def decimal_rate(row: dict[str, Any]) -> Decimal:
@@ -167,7 +182,7 @@ def fetch_live_series(series: Series, end_ms: int) -> list[dict[str, Any]]:
             query = urlencode(
                 {"symbol": series.contract, "startTime": cursor, "endTime": end_ms, "limit": 1000}
             )
-            page = request_json(f"https://fapi.binance.com/fapi/v1/fundingRate?{query}")
+            page = request_binance_json("/fapi/v1/fundingRate", query)
             page_limit = 1000
             timestamp_field = "fundingTime"
         else:
@@ -324,7 +339,7 @@ def audit_snapshot(
     if providers_to_compare:
         onboard_dates: dict[str, int] = {}
         if "binance" in providers_to_compare:
-            exchange_info = request_json("https://fapi.binance.com/fapi/v1/exchangeInfo")
+            exchange_info = request_binance_json("/fapi/v1/exchangeInfo")
             onboard_dates = {
                 item["symbol"]: int(item["onboardDate"])
                 for item in exchange_info.get("symbols", [])
