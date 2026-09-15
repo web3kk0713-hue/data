@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#f5f5f7" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='11' fill='%231d1d1f'/%3E%3Ccircle cx='32' cy='8' r='6' fill='%23ff2670'/%3E%3Ccircle cx='56' cy='32' r='6' fill='%23ff2670'/%3E%3Ccircle cx='32' cy='56' r='6' fill='%23ff2670'/%3E%3Ccircle cx='8' cy='32' r='6' fill='%23ff2670'/%3E%3C/svg%3E" />
     <title>Funding Lens · 资金费率看板</title>
-    <link rel="stylesheet" href="./dashboard.css?v=20260914-1" />
+    <link rel="stylesheet" href="./dashboard.css?v=20260915-1" />
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -55,24 +55,25 @@
           </div>
         </header>
 
-        <section class="view" id="overview-view" aria-labelledby="overview-title">
-          <div class="hero-row">
+        <section class="view funding-overview" id="overview-view" aria-labelledby="overview-title">
+          <div class="hero-row funding-hero">
             <div>
-              <span class="eyebrow">CROSS-VENUE FUNDING</span>
-              <h1 id="overview-title">资金费率概览</h1>
-              <p>同一标的、同一时间窗口，直接比较 Binance 与 XYZ 的累计费率路径。</p>
+              <h1 id="overview-title">跨场所资金费率</h1>
+              <p>Binance 与 XYZ 的累计路径，一眼看清。</p>
             </div>
           </div>
 
-          <section class="time-toolbar panel" aria-label="时间范围">
-            <div class="time-title">
-              <span class="time-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M7 3v3m10-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z" /></svg>
-              </span>
-              <span><strong>时间窗口</strong><small id="range-context">7天 · 北京时间</small></span>
+          <section class="market-filterbar panel" aria-label="概览筛选">
+            <div class="filter-group asset-filter">
+              <span class="filter-label">标的</span>
+              <div class="segmented-control asset-switch" role="group" aria-label="选择标的">
+                <button class="is-active" type="button" data-compare-asset="CXMT" aria-pressed="true">CXMT</button>
+                <button type="button" data-compare-asset="UNITREE" aria-pressed="false">UNITREE</button>
+              </div>
             </div>
-            <div class="time-presets">
-              <span class="control-label">快捷选择</span>
+
+            <div class="filter-group range-filter">
+              <span class="filter-label">时间</span>
               <div class="segmented-control range-switch" role="group" aria-label="选择对比时间">
                 <button type="button" data-range="24h" aria-pressed="false">24小时</button>
                 <button class="is-active" type="button" data-range="7d" aria-pressed="true">7天</button>
@@ -80,50 +81,40 @@
                 <button type="button" data-range="all" aria-pressed="false">上线以来</button>
               </div>
             </div>
-            <span class="time-divider" aria-hidden="true"></span>
-            <div class="time-window-editor" aria-label="精确时间窗口">
-              <label class="time-field"><span>开始时间</span><input id="range-start" type="datetime-local" step="3600" aria-describedby="range-error" /></label>
+
+            <div class="exact-range" aria-label="精确时间窗口">
+              <span class="exact-range-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M7 3v3m10-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z" /></svg>
+              </span>
+              <label class="time-field"><span>开始</span><input id="range-start" name="range-start" type="datetime-local" step="3600" autocomplete="off" aria-label="开始时间，北京时间，精确到小时" aria-describedby="range-error" /></label>
               <span class="time-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" /></svg></span>
-              <label class="time-field"><span>结束时间</span><input id="range-end" type="datetime-local" step="3600" aria-describedby="range-error" /></label>
+              <label class="time-field"><span>结束</span><input id="range-end" name="range-end" type="datetime-local" step="3600" autocomplete="off" aria-label="结束时间，北京时间，精确到小时" aria-describedby="range-error" /></label>
             </div>
+            <div class="filter-context"><span id="range-context">7天 · 北京时间</span><b>精确到小时</b></div>
             <p class="time-error" id="range-error" role="alert" hidden></p>
           </section>
 
-          <div class="comparison-controlbar panel" aria-label="比较筛选">
-            <div class="control-cluster">
-              <span class="control-label">标的</span>
-              <div class="segmented-control asset-switch" role="group" aria-label="选择标的">
-                <button class="is-active" type="button" data-compare-asset="CXMT" aria-pressed="true">CXMT</button>
-                <button type="button" data-compare-asset="UNITREE" aria-pressed="false">UNITREE</button>
-              </div>
-            </div>
-            <span class="toolbar-divider" aria-hidden="true"></span>
-            <div class="control-cluster">
-              <span class="control-label">查看口径</span>
-              <div class="segmented-control metric-switch" role="group" aria-label="选择资金费率口径">
-                <button class="is-active" type="button" data-metric="net" aria-pressed="true">净资费</button>
-                <button type="button" data-metric="positive" aria-pressed="false">正资费</button>
-                <button type="button" data-metric="negative" aria-pressed="false">负资费</button>
-              </div>
-            </div>
-            <div class="venue-lockup" aria-label="固定比较场所">
-              <span><i class="venue-dot is-binance"></i>Binance</span>
-              <b>对比</b>
-              <span><i class="venue-dot is-xyz"></i>XYZ</span>
-            </div>
-          </div>
-
           <section class="panel rate-comparison-panel" aria-labelledby="comparison-title">
             <div class="panel-heading comparison-heading">
-              <div><h2 id="comparison-title">CXMT · 场所费率对比</h2><p id="comparison-subtitle">共同时间窗口内，从起点重新累计。</p></div>
-              <span class="soft-badge" id="record-count">—</span>
+              <div class="comparison-title-block">
+                <div class="comparison-title-line"><h2 id="comparison-title">CXMT · 场所费率对比</h2><span class="soft-badge" id="record-count">—</span></div>
+                <p id="comparison-subtitle">统一时间轴，各场所独立结算。</p>
+              </div>
+              <div class="metric-control">
+                <span class="filter-label">口径</span>
+                <div class="segmented-control metric-switch" role="group" aria-label="选择资金费率口径">
+                  <button class="is-active" type="button" data-metric="net" aria-pressed="true">净资费</button>
+                  <button type="button" data-metric="positive" aria-pressed="false">正资费</button>
+                  <button type="button" data-metric="negative" aria-pressed="false">负资费</button>
+                </div>
+              </div>
             </div>
 
             <div class="comparison-summary" id="comparison-summary" aria-live="polite"></div>
 
             <div class="comparison-chart-heading">
-              <div><h3 id="comparison-chart-heading">累计净资费路径</h3><p id="comparison-chart-subtitle">共同时间窗口 · 北京时间</p></div>
-              <span class="latest-key" id="latest-key"><i></i>最新结算点</span>
+              <div><h3 id="comparison-chart-heading">累计净资费路径</h3><p id="comparison-chart-subtitle">独立结算 · 缺口沿用最近累计值</p></div>
+              <div class="comparison-chart-guides"><span class="comparison-gesture-hint">长按滑动</span><span class="latest-key" id="latest-key"><i></i><span id="latest-key-label">最新结算</span></span></div>
             </div>
             <div class="comparison-chart-stage" id="comparison-chart-stage">
               <div class="chart-loading">正在生成比较曲线…</div>
@@ -195,6 +186,6 @@
     <div class="comparison-tooltip" id="comparison-tooltip" role="status" aria-live="polite"></div>
     <div class="chart-tooltip" id="chart-tooltip" role="status" aria-live="polite"></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./dashboard.js?v=20260914-1"></script>
+    <script type="module" src="./dashboard.js?v=20260915-1"></script>
   </body>
 </html>

@@ -573,11 +573,12 @@ function comparisonDataBounds() {
       .sort((left, right) => left.timestamp_ms - right.timestamp_ms);
     return { first: rows[0]?.timestamp_ms, last: rows.at(-1)?.timestamp_ms };
   });
-  if (venueBounds.some((bound) => !Number.isFinite(bound.first) || !Number.isFinite(bound.last))) return null;
+  const availableBounds = venueBounds.filter((bound) => Number.isFinite(bound.first) && Number.isFinite(bound.last));
+  if (!availableBounds.length) return null;
   const listingStart = FUNDING_SERIES.find((series) => series.asset === state.compareAsset)?.listingStartMs;
   return {
-    first: Number.isFinite(listingStart) ? listingStart : Math.max(...venueBounds.map((bound) => bound.first)),
-    last: Math.min(...venueBounds.map((bound) => bound.last)),
+    first: Number.isFinite(listingStart) ? listingStart : Math.min(...availableBounds.map((bound) => bound.first)),
+    last: Math.max(...availableBounds.map((bound) => bound.last)),
   };
 }
 
@@ -598,39 +599,46 @@ function comparisonWindow() {
 }
 
 function buildComparisonSeries(venue, selectedWindow) {
-  const rows = state.data.records
+  const allRows = state.data.records
     .filter((row) => row.asset === state.compareAsset
-      && row.venue === venue
-      && row.timestamp_ms >= selectedWindow.start
-      && row.timestamp_ms <= selectedWindow.end)
+      && row.venue === venue)
     .sort((left, right) => left.timestamp_ms - right.timestamp_ms);
+  const available = allRows.length > 0;
+  const rows = allRows.filter((row) => row.timestamp_ms >= selectedWindow.start
+    && row.timestamp_ms <= selectedWindow.end);
   let positive = 0n;
   let negative = 0n;
   let net = 0n;
   let count = 0;
-  const points = [{ timestamp_ms: selectedWindow.start, positive, negative, net, count, event: null }];
+  let lastSettlementMs = null;
+  const points = available
+    ? [{ timestamp_ms: selectedWindow.start, positive, negative, net, count, lastSettlementMs, event: null }]
+    : [];
   rows.forEach((row) => {
     const rateUnits = comparisonDecimalToUnits(row.funding_rate_raw ?? row.funding_rate);
     if (rateUnits > 0n) positive += rateUnits;
     if (rateUnits < 0n) negative += rateUnits;
     net += rateUnits;
     count += 1;
-    points.push({ timestamp_ms: row.timestamp_ms, positive, negative, net, count, event: row });
+    lastSettlementMs = row.timestamp_ms;
+    points.push({ timestamp_ms: row.timestamp_ms, positive, negative, net, count, lastSettlementMs, event: row });
   });
-  if (points.at(-1).timestamp_ms < selectedWindow.end) {
-    points.push({ timestamp_ms: selectedWindow.end, positive, negative, net, count, event: null, extension: true });
+  if (available && points.at(-1).timestamp_ms < selectedWindow.end) {
+    points.push({ timestamp_ms: selectedWindow.end, positive, negative, net, count, lastSettlementMs, event: null, extension: true });
   }
-  const selectedUnits = { positive, negative, net }[state.metric];
+  const selectedUnits = available ? { positive, negative, net }[state.metric] : null;
   return {
     venue,
     color: COMPARISON_VENUE_META[venue].color,
+    available,
     rows,
     points,
     positive,
     negative,
     net,
     selectedUnits,
-    annualizedUnits: comparisonAnnualizedAt(selectedUnits, selectedWindow.start, selectedWindow.end, count),
+    annualizedUnits: available ? comparisonAnnualizedAt(selectedUnits, selectedWindow.start, selectedWindow.end, count) : null,
+    latest: rows.at(-1) || null,
     source: comparisonSourceFor(venue),
   };
 }
@@ -643,12 +651,24 @@ function currentComparisonView() {
 
 function renderComparisonSummary(view) {
   const summaryHtml = (series) => {
-    const sourceLabel = series.source?.mode === "live" ? "在线" : "快照回退";
+    if (!series.available) {
+      return `<article class="venue-summary is-unavailable" style="--venue-color:${series.color}">
+        <div class="venue-identity">
+          <div class="venue-name"><i></i><strong>${series.venue}</strong></div>
+          <small>暂无可用结算数据</small>
+        </div>
+        <div class="summary-metric"><span>${METRIC_META[state.metric].summaryLabel}</span><strong>—</strong></div>
+        <div class="summary-metric"><span>年化</span><strong>—</strong></div>
+      </article>`;
+    }
+    const latestLabel = series.latest
+      ? `${series.rows.length} 次 · 最新 ${beijingDate(series.latest.timestamp_ms)}${series.latest.timestamp_ms < view.window.end ? " · 沿用" : ""}`
+      : "区间内未结算";
     const annualized = series.annualizedUnits == null ? "—" : comparisonFormatUnitsPct(series.annualizedUnits, 2);
     return `<article class="venue-summary" style="--venue-color:${series.color}">
       <div class="venue-identity">
         <div class="venue-name"><i></i><strong>${series.venue}</strong></div>
-        <small>${series.rows.length} 次结算 · ${sourceLabel}</small>
+        <small>${latestLabel}</small>
       </div>
       <div class="summary-metric">
         <span>${METRIC_META[state.metric].summaryLabel}</span>
@@ -662,11 +682,11 @@ function renderComparisonSummary(view) {
     </article>`;
   };
   const [binance, xyz] = view.series;
-  const spread = xyz.selectedUnits - binance.selectedUnits;
+  const spread = binance.available && xyz.available ? xyz.selectedUnits - binance.selectedUnits : null;
   $("#comparison-summary").innerHTML = `${summaryHtml(binance)}
     <div class="spread-summary">
       <span>XYZ − Binance</span>
-      <strong class="${comparisonValueClass(spread)}">${comparisonFormatPp(spread)}</strong>
+      <strong class="${spread == null ? "" : comparisonValueClass(spread)}">${spread == null ? "—" : comparisonFormatPp(spread)}</strong>
       <small>${METRIC_META[state.metric].label}场所差</small>
     </div>
     ${summaryHtml(xyz)}`;
@@ -683,20 +703,46 @@ function comparisonNiceDomain(values) {
   return { min: min - span * 0.09, max: max + span * 0.09 };
 }
 
-function comparisonStepPath(points, metric, x, y) {
-  return points.map((point, index) => {
-    const pointX = x(point.timestamp_ms).toFixed(2);
-    const pointY = y(comparisonUnitsToNumber(point[metric])).toFixed(2);
-    return index === 0 ? `M${pointX},${pointY}` : `H${pointX}V${pointY}`;
-  }).join(" ");
+function comparisonLinePath(points, metric, x, y) {
+  const coordinates = points.map((point) => ({
+    x: x(point.timestamp_ms),
+    y: y(comparisonUnitsToNumber(point[metric])),
+  }));
+  if (!coordinates.length) return "";
+  if (coordinates.length === 1) return `M${coordinates[0].x.toFixed(2)},${coordinates[0].y.toFixed(2)}`;
+
+  const intervals = coordinates.slice(1).map((point, index) => point.x - coordinates[index].x);
+  const secants = coordinates.slice(1).map((point, index) => (point.y - coordinates[index].y) / intervals[index]);
+  const slopes = new Array(coordinates.length);
+  slopes[0] = secants[0];
+  slopes[slopes.length - 1] = secants.at(-1);
+  for (let index = 1; index < coordinates.length - 1; index += 1) {
+    const previous = secants[index - 1];
+    const next = secants[index];
+    if (previous === 0 || next === 0 || Math.sign(previous) !== Math.sign(next)) {
+      slopes[index] = 0;
+      continue;
+    }
+    const previousInterval = intervals[index - 1];
+    const nextInterval = intervals[index];
+    const previousWeight = 2 * nextInterval + previousInterval;
+    const nextWeight = nextInterval + 2 * previousInterval;
+    slopes[index] = (previousWeight + nextWeight) / (previousWeight / previous + nextWeight / next);
+  }
+
+  const commands = [`M${coordinates[0].x.toFixed(2)},${coordinates[0].y.toFixed(2)}`];
+  for (let index = 0; index < coordinates.length - 1; index += 1) {
+    const current = coordinates[index];
+    const next = coordinates[index + 1];
+    const interval = intervals[index];
+    commands.push(`C${(current.x + interval / 3).toFixed(2)},${(current.y + slopes[index] * interval / 3).toFixed(2)} ${(next.x - interval / 3).toFixed(2)},${(next.y - slopes[index + 1] * interval / 3).toFixed(2)} ${next.x.toFixed(2)},${next.y.toFixed(2)}`);
+  }
+  return commands.join(" ");
 }
 
-function comparisonRealTail(points, metric, x, y) {
-  const latestIndex = points.findLastIndex((point) => point.event);
-  if (latestIndex < 1) return "";
-  const previous = points[latestIndex - 1];
-  const latest = points[latestIndex];
-  return `M${x(previous.timestamp_ms).toFixed(2)},${y(comparisonUnitsToNumber(previous[metric])).toFixed(2)} H${x(latest.timestamp_ms).toFixed(2)} V${y(comparisonUnitsToNumber(latest[metric])).toFixed(2)}`;
+function comparisonCarryPath(point, end, metric, x, y) {
+  if (!point || point.timestamp_ms >= end) return "";
+  return `M${x(point.timestamp_ms).toFixed(2)},${y(comparisonUnitsToNumber(point[metric])).toFixed(2)} H${x(end).toFixed(2)}`;
 }
 
 function comparisonPlaceEndLabels(series, metric, y, top, bottom) {
@@ -758,16 +804,21 @@ function positionComparisonTooltip(tooltip, event, anchor) {
 
 function showComparisonTooltip(timestamp, observations, event, anchor, selectedWindow) {
   const tooltip = $("#comparison-tooltip");
-  const spread = observations[1].units - observations[0].units;
+  const spread = observations.length === 2 ? observations[1].units - observations[0].units : null;
   tooltip.innerHTML = `<div class="comparison-tooltip-time">${beijingDate(timestamp, true)}</div>
     ${observations.map(({ series, point, units }) => {
       const annualized = comparisonAnnualizedAt(units, selectedWindow.start, timestamp, point.count);
+      const settlementLabel = point.lastSettlementMs == null
+        ? "区间内未结算"
+        : Math.abs(point.lastSettlementMs - timestamp) < 1_000
+          ? `${beijingDate(point.lastSettlementMs)} 已结算`
+          : `沿用 ${beijingDate(point.lastSettlementMs)} 结算`;
       return `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
-        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span><small>年化 ${annualized == null ? "—" : comparisonFormatUnitsPct(annualized, 2)}</small></div>
+        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span><small>${settlementLabel} · 年化 ${annualized == null ? "—" : comparisonFormatUnitsPct(annualized, 2)}</small></div>
         <strong>${comparisonFormatUnitsPct(units)}</strong>
       </div>`;
     }).join("")}
-    <div class="comparison-tooltip-spread"><span>XYZ − Binance</span><strong>${comparisonFormatPp(spread)}</strong></div>`;
+    ${spread == null ? "" : `<div class="comparison-tooltip-spread"><span>XYZ − Binance</span><strong>${comparisonFormatPp(spread)}</strong></div>`}`;
   tooltip.classList.add("is-visible");
   positionComparisonTooltip(tooltip, event, anchor);
 }
@@ -783,12 +834,15 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
   const crosshair = $(".comparison-chart-crosshair", cursor);
   const markerLayer = $("[data-comparison-markers]", cursor);
   let keyboardIndex = timeline.length - 1;
+  let pressTimer = null;
+  let touchGesture = null;
+  let suppressNextClick = false;
 
   const show = (timestamp, event = null, pin = false) => {
     const cursorX = x(timestamp);
     crosshair.setAttribute("x1", cursorX);
     crosshair.setAttribute("x2", cursorX);
-    const observations = view.series.map((series) => {
+    const observations = view.series.filter((series) => series.available).map((series) => {
       const point = latestComparisonPointAt(series.points, timestamp);
       return { series, point, units: point[state.metric] };
     });
@@ -807,15 +861,84 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     return timeline[nearestComparisonIndex(timeline, view.window.start + ratio * (view.window.end - view.window.start))];
   };
 
+  const clearPressTimer = () => {
+    window.clearTimeout(pressTimer);
+    pressTimer = null;
+  };
+
+  const finishTouchGesture = (event = null) => {
+    clearPressTimer();
+    if (touchGesture?.scrubbing && event) show(timestampFromPointer(event), event, true);
+    if (touchGesture?.scrubbing) {
+      suppressNextClick = true;
+      window.setTimeout(() => { suppressNextClick = false; }, 650);
+    }
+    try {
+      if (touchGesture && overlay.hasPointerCapture(touchGesture.pointerId)) overlay.releasePointerCapture(touchGesture.pointerId);
+    } catch (_) {
+      // Synthetic test events may not create pointer capture.
+    }
+    overlay.classList.remove("is-scrubbing");
+    container.classList.remove("is-scrubbing");
+    touchGesture = null;
+  };
+
+  overlay.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch") return;
+    clearPressTimer();
+    touchGesture = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrubbing: false,
+    };
+    pressTimer = window.setTimeout(() => {
+      if (!touchGesture || touchGesture.pointerId !== event.pointerId) return;
+      touchGesture.scrubbing = true;
+      state.compareTooltipPinned = true;
+      overlay.classList.add("is-scrubbing");
+      container.classList.add("is-scrubbing");
+      try { overlay.setPointerCapture(event.pointerId); } catch (_) { /* Pointer capture is progressive enhancement. */ }
+      show(timestampFromPointer(event), event, true);
+    }, 300);
+  });
+
   overlay.addEventListener("pointermove", (event) => {
+    if (event.pointerType === "touch" && touchGesture?.pointerId === event.pointerId) {
+      if (!touchGesture.scrubbing) {
+        const moved = Math.hypot(event.clientX - touchGesture.startX, event.clientY - touchGesture.startY);
+        if (moved > 8) {
+          clearPressTimer();
+          touchGesture = null;
+        }
+        return;
+      }
+      event.preventDefault();
+      show(timestampFromPointer(event), event, true);
+      return;
+    }
     if (event.pointerType !== "touch" && !state.compareTooltipPinned) show(timestampFromPointer(event), event, false);
+  });
+  overlay.addEventListener("pointerup", (event) => {
+    if (event.pointerType === "touch" && touchGesture?.pointerId === event.pointerId) finishTouchGesture(event);
+  });
+  overlay.addEventListener("pointercancel", (event) => {
+    if (event.pointerType === "touch" && touchGesture?.pointerId === event.pointerId) finishTouchGesture();
   });
   overlay.addEventListener("pointerleave", (event) => {
     if (event.pointerType !== "touch" && !state.compareTooltipPinned) hideComparisonTooltip(cursor);
   });
   overlay.addEventListener("click", (event) => {
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      event.preventDefault();
+      return;
+    }
     state.compareTooltipPinned = !state.compareTooltipPinned;
     show(timestampFromPointer(event), event, state.compareTooltipPinned);
+  });
+  overlay.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
   });
   overlay.addEventListener("focus", () => show(timeline[keyboardIndex], null, false));
   overlay.addEventListener("blur", () => {
@@ -836,21 +959,23 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
 
 function renderComparisonChart(view) {
   const container = $("#comparison-chart-stage");
-  if (view.series.every((series) => series.rows.length === 0)) {
-    container.innerHTML = '<div class="chart-empty">所选共同区间内暂无结算记录。</div>';
+  const availableSeries = view.series.filter((series) => series.available && series.points.length > 0);
+  if (!availableSeries.length || availableSeries.every((series) => series.rows.length === 0)) {
+    container.innerHTML = '<div class="chart-empty">所选时间范围暂无结算记录。</div>';
     $("#latest-key").classList.remove("is-live");
+    $("#latest-key-label").textContent = "暂无结算";
     return;
   }
-  const width = Math.max(340, Math.round(container.clientWidth || 1100));
+  const width = Math.max(280, Math.round(container.clientWidth || 1100));
   const compact = width < 680;
-  const height = compact ? 300 : 410;
+  const height = compact ? 380 : 450;
   const margin = compact
-    ? { top: 24, right: 14, bottom: 38, left: 70 }
+    ? { top: 24, right: 22, bottom: 38, left: width < 320 ? 62 : 70 }
     : { top: 26, right: 126, bottom: 42, left: 88 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const { start, end } = view.window;
-  const values = view.series.flatMap((series) => series.points.map((point) => comparisonUnitsToNumber(point[state.metric])));
+  const values = availableSeries.flatMap((series) => series.points.map((point) => comparisonUnitsToNumber(point[state.metric])));
   const domain = comparisonNiceDomain(values);
   const x = (timestamp) => margin.left + (timestamp - start) / (end - start) * plotWidth;
   const y = (value) => margin.top + (domain.max - value) / (domain.max - domain.min) * plotHeight;
@@ -861,20 +986,46 @@ function renderComparisonChart(view) {
     ? `<line class="comparison-chart-zero" x1="${margin.left}" y1="${y(0)}" x2="${width - margin.right}" y2="${y(0)}" />`
     : "";
   const bounds = comparisonDataBounds();
-  const reachesLatest = bounds && Math.abs(view.window.end - bounds.last) < 60_000;
-  const paths = view.series.map((series) => {
-    const latestReal = series.points.findLast((point) => point.event);
-    const pulse = Boolean(latestReal && reachesLatest && series.source?.mode === "live");
-    if (!latestReal) return `<path class="comparison-chart-line" d="${comparisonStepPath(series.points, state.metric, x, y)}" stroke="${series.color}" />`;
-    const pointX = x(latestReal.timestamp_ms);
-    const pointY = y(comparisonUnitsToNumber(latestReal[state.metric]));
-    return `<path class="comparison-chart-line" d="${comparisonStepPath(series.points, state.metric, x, y)}" stroke="${series.color}" />
-      <path class="comparison-chart-tail${pulse ? " is-live" : ""}" d="${comparisonRealTail(series.points, state.metric, x, y)}" stroke="${series.color}" style="--tail-color:${series.color}" />
-      <circle class="comparison-latest-halo${pulse ? " is-live" : ""}" cx="${pointX}" cy="${pointY}" r="7" style="--point-color:${series.color}" />
-      <circle class="comparison-latest-dot" cx="${pointX}" cy="${pointY}" r="4" style="--point-color:${series.color}" />`;
+  const reachesLatest = Boolean(bounds && view.window.end === bounds.last);
+  const latestVisibleTimestamp = Math.max(...availableSeries.map((series) => series.latest?.timestamp_ms ?? -Infinity));
+  const latestVisibleSeries = availableSeries.filter((series) => series.latest?.timestamp_ms === latestVisibleTimestamp);
+  const latestKey = $("#latest-key");
+  if (Number.isFinite(latestVisibleTimestamp) && latestVisibleSeries.length > 0) {
+    latestKey.style.setProperty("--latest-color", latestVisibleSeries.length === 1 ? latestVisibleSeries[0].color : "var(--ink)");
+    $("#latest-key-label").textContent = `${latestVisibleSeries.map((series) => series.venue).join("/")} · ${beijingDate(latestVisibleTimestamp).slice(-5)}`;
+  } else {
+    latestKey.style.removeProperty("--latest-color");
+    $("#latest-key-label").textContent = "暂无结算";
+  }
+  const timeline = [...new Set([start, end, ...availableSeries.flatMap((series) => series.rows.map((row) => row.timestamp_ms))])].sort((left, right) => left - right);
+  const paths = availableSeries.map((series) => {
+    const realPoints = series.points.filter((point) => !point.extension);
+    const latestReal = realPoints.findLast((point) => point.event);
+    const carryAnchor = latestReal || realPoints.at(-1);
+    const displayEnd = latestReal?.timestamp_ms ?? end;
+    const displayPoints = timeline
+      .filter((timestamp) => timestamp <= displayEnd)
+      .map((timestamp) => ({ ...latestComparisonPointAt(series.points, timestamp), timestamp_ms: timestamp }));
+    const mainPath = comparisonLinePath(displayPoints, state.metric, x, y);
+    const carry = comparisonCarryPath(carryAnchor, end, state.metric, x, y);
+    const pulse = Boolean(latestReal
+      && bounds
+      && reachesLatest
+      && latestReal.timestamp_ms === bounds.last
+      && series.source?.mode === "live");
+    const latestMarker = latestReal
+      ? `<g class="comparison-latest-marker${pulse ? " is-live" : ""}" transform="translate(${x(latestReal.timestamp_ms).toFixed(2)} ${y(comparisonUnitsToNumber(latestReal[state.metric])).toFixed(2)})" style="--point-color:${series.color}">
+          <g class="comparison-latest-pulse"><circle cx="0" cy="0" r="9" /></g>
+          <circle class="comparison-latest-dot" cx="0" cy="0" r="4.9" />
+        </g>`
+      : "";
+    return `<path class="comparison-chart-line-underlay" d="${mainPath}" stroke="${series.color}" />
+      <path class="comparison-chart-line" d="${mainPath}" stroke="${series.color}" />
+      ${carry ? `<path class="comparison-chart-carry" d="${carry}" stroke="${series.color}" />` : ""}
+      ${latestMarker}`;
   }).join("");
-  $("#latest-key").classList.toggle("is-live", Boolean(reachesLatest && view.series.some((series) => series.source?.mode === "live")));
-  const labelPlacements = compact ? [] : comparisonPlaceEndLabels(view.series, state.metric, y, margin.top, height - margin.bottom);
+  latestKey.classList.toggle("is-live", Boolean(reachesLatest && latestVisibleSeries.some((series) => series.source?.mode === "live")));
+  const labelPlacements = compact ? [] : comparisonPlaceEndLabels(availableSeries, state.metric, y, margin.top, height - margin.bottom);
   const endLabels = labelPlacements.map(({ item, y: actualY, labelY }) => {
     const labelX = width - margin.right + 12;
     const value = item.points.at(-1)[state.metric];
@@ -885,10 +1036,9 @@ function renderComparisonChart(view) {
   const tickCount = compact ? 3 : 5;
   const xTicks = Array.from({ length: tickCount }, (_, index) => start + (end - start) * index / (tickCount - 1));
   const xLabels = xTicks.map((tick, index) => `<text class="comparison-chart-axis" x="${x(tick)}" y="${height - 12}" text-anchor="${index === 0 ? "start" : index === tickCount - 1 ? "end" : "middle"}">${beijingDate(tick).slice(5, 16)}</text>`).join("");
-  const timeline = [...new Set([start, end, ...view.series.flatMap((series) => series.rows.map((row) => row.timestamp_ms))])].sort((left, right) => left - right);
   container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="comparison-svg-title comparison-svg-desc">
     <title id="comparison-svg-title">${state.compareAsset} ${METRIC_META[state.metric].label}场所对比</title>
-    <desc id="comparison-svg-desc">Binance 与 XYZ 在共同时间区间的阶梯累计曲线。</desc>
+    <desc id="comparison-svg-desc">Binance 与 XYZ 使用无过冲平滑线连接共享结算时间点；每个可交互时刻严格沿用该场所最近累计值。</desc>
     ${grids}${zeroLine}${paths}${endLabels}${xLabels}
     <g class="comparison-shared-cursor" data-comparison-cursor aria-hidden="true">
       <line class="comparison-chart-crosshair" y1="${margin.top}" y2="${height - margin.bottom}" />
@@ -987,9 +1137,10 @@ function renderOverview() {
   $("#metric-definition").textContent = METRIC_META[state.metric].definition;
   if (!view) {
     $("#comparison-summary").innerHTML = "";
-    $("#comparison-chart-stage").innerHTML = '<div class="chart-empty">两个场所没有可比较的时间区间。</div>';
+    $("#comparison-chart-stage").innerHTML = '<div class="chart-empty">所选时间范围暂无可用数据。</div>';
     $("#record-count").textContent = "0 条结算";
     $("#latest-key").classList.remove("is-live");
+    $("#latest-key-label").textContent = "暂无结算";
     showComparisonTimeError("该时段没有可比较数据");
     return;
   }
@@ -997,8 +1148,8 @@ function renderOverview() {
     ? "自定义时段 · 北京时间"
     : `${COMPARISON_RANGE_META[state.compareRange].label}${state.compareRange === "custom" ? "时段" : ""} · 北京时间`;
   syncComparisonTimeInputs(view.window);
-  $("#comparison-subtitle").textContent = `${beijingDate(view.window.start)} 至 ${beijingDate(view.window.end)} · 从区间起点重新累计`;
-  $("#comparison-chart-subtitle").textContent = "共同时间窗口 · 北京时间";
+  $("#comparison-subtitle").textContent = `${beijingDate(view.window.start)} 至 ${beijingDate(view.window.end)} · 统一时间轴`;
+  $("#comparison-chart-subtitle").textContent = "独立结算 · 缺口沿用最近累计值";
   $("#record-count").textContent = `${view.series.reduce((total, series) => total + series.rows.length, 0)} 条结算`;
   renderComparisonSummary(view);
   renderComparisonChart(view);
