@@ -611,12 +611,13 @@ tbody tr:hover { background: var(--track); }
 .comparison-tooltip { position: fixed; z-index: 125; display: none; min-width: 250px; max-width: min(310px, calc(100vw - 24px)); padding: 12px; color: var(--ink); background: color-mix(in srgb, var(--panel-solid) 94%, transparent); border: 1px solid var(--line-strong); border-radius: 13px; box-shadow: 0 15px 42px rgba(25, 18, 29, 0.18); backdrop-filter: blur(18px) saturate(135%); pointer-events: none; }
 .comparison-tooltip.is-visible { display: block; }
 .comparison-tooltip-time { margin-bottom: 8px; color: var(--ink); font-size: 11px; font-weight: 650; }
-.comparison-tooltip-row { display: grid; grid-template-columns: 8px minmax(58px, .65fr) minmax(90px, 1fr); align-items: center; gap: 8px; min-height: 34px; }
+.comparison-tooltip-row { display: grid; grid-template-columns: 8px minmax(52px, .55fr) minmax(82px, auto) minmax(64px, auto); align-items: center; gap: 8px; min-height: 34px; }
 .comparison-tooltip-row > i { width: 7px; height: 7px; border-radius: 50%; background: var(--row-color); }
 .comparison-tooltip-venue { display: grid; gap: 2px; }
 .comparison-tooltip-venue span { color: var(--ink); font-size: 11px; font-weight: 600; }
 .comparison-tooltip-venue small { color: var(--secondary); font-size: 9px; }
 .comparison-tooltip-row > strong { text-align: right; color: var(--ink); font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.comparison-tooltip-apr { color: var(--secondary); font-size: 9px; font-weight: 560; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .comparison-tooltip-spread { display: flex; justify-content: space-between; gap: 16px; margin-top: 7px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--secondary); font-size: 10px; }
 .comparison-tooltip-spread strong { color: var(--ink); font-weight: 620; font-variant-numeric: tabular-nums; }
 
@@ -910,7 +911,7 @@ body {
 .comparison-chart-stage.is-scrubbing { user-select: none; -webkit-user-select: none; }
 .comparison-footline { padding-top: 9px; }
 .comparison-tooltip { width: min(326px, calc(100vw - 24px)); min-width: 0; max-width: none; }
-.comparison-tooltip-row { grid-template-columns: 8px minmax(138px, 1fr) minmax(88px, auto); }
+.comparison-tooltip-row { grid-template-columns: 8px minmax(58px, 1fr) minmax(88px, auto) minmax(68px, auto); }
 .comparison-tooltip-venue small { white-space: nowrap; font-size: 8.5px; }
 
 @keyframes comparison-latest-point-pulse {
@@ -1029,10 +1030,11 @@ body {
 
   .comparison-tooltip { width: min(264px, calc(100vw - 44px)); padding: 8px 9px; border-radius: 12px; white-space: normal; }
   .comparison-tooltip-time { margin-bottom: 2px; font-size: 9px; }
-  .comparison-tooltip-row { grid-template-columns: 7px minmax(0, 1fr) auto; gap: 7px; min-height: 20px; }
+  .comparison-tooltip-row { grid-template-columns: 7px minmax(42px, 1fr) minmax(72px, auto) minmax(58px, auto); gap: 6px; min-height: 22px; }
   .comparison-tooltip-venue { display: block; }
   .comparison-tooltip-venue span { font-size: 10px; }
   .comparison-tooltip-row > strong { font-size: 10px; }
+  .comparison-tooltip-apr { font-size: 8.5px; }
   .comparison-tooltip-spread { margin-top: 2px; padding-top: 4px; font-size: 9px; }
 }
 

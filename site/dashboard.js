@@ -801,14 +801,18 @@ function positionComparisonTooltip(tooltip, event, anchor) {
   tooltip.style.top = `${Math.max(viewportGap, Math.min(top, window.innerHeight - rect.height - viewportGap))}px`;
 }
 
-function showComparisonTooltip(timestamp, observations, event, anchor) {
+function showComparisonTooltip(timestamp, observations, event, anchor, selectedWindow) {
   const tooltip = $("#comparison-tooltip");
   const spread = observations.length === 2 ? observations[1].units - observations[0].units : null;
   tooltip.innerHTML = `<div class="comparison-tooltip-time">${beijingDate(timestamp, true)}</div>
-    ${observations.map(({ series, units }) => `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
+    ${observations.map(({ series, point, units }) => {
+      const annualized = comparisonAnnualizedAt(units, selectedWindow.start, timestamp, point.count);
+      return `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
         <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span></div>
         <strong>${comparisonFormatUnitsPct(units)}</strong>
-      </div>`).join("")}
+        <small class="comparison-tooltip-apr">年化 ${annualized == null ? "—" : comparisonFormatUnitsPct(annualized, 2)}</small>
+      </div>`;
+    }).join("")}
     ${spread == null ? "" : `<div class="comparison-tooltip-spread"><span>XYZ − Binance</span><strong>${comparisonFormatPp(spread)}</strong></div>`}`;
   tooltip.classList.add("is-visible");
   positionComparisonTooltip(tooltip, event, anchor);
@@ -842,7 +846,7 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     keyboardIndex = timeline.indexOf(timestamp);
     overlay.setAttribute("aria-valuenow", String(keyboardIndex));
     overlay.setAttribute("aria-valuetext", observations.map(({ series, units }) => `${series.venue} ${comparisonFormatUnitsPct(units)}`).join("；"));
-    showComparisonTooltip(timestamp, observations, event, overlay);
+    showComparisonTooltip(timestamp, observations, event, overlay, view.window);
     if (pin) state.compareTooltipPinned = true;
   };
 
