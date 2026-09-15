@@ -662,7 +662,7 @@ function renderComparisonSummary(view) {
       </article>`;
     }
     const latestLabel = series.latest
-      ? `${series.rows.length} 次 · 最新 ${beijingDate(series.latest.timestamp_ms)}${series.latest.timestamp_ms < view.window.end ? " · 沿用" : ""}`
+      ? `${series.rows.length} 次 · 最新 ${beijingDate(series.latest.timestamp_ms)}`
       : "区间内未结算";
     const annualized = series.annualizedUnits == null ? "—" : comparisonFormatUnitsPct(series.annualizedUnits, 2);
     return `<article class="venue-summary" style="--venue-color:${series.color}">
@@ -687,7 +687,6 @@ function renderComparisonSummary(view) {
     <div class="spread-summary">
       <span>XYZ − Binance</span>
       <strong class="${spread == null ? "" : comparisonValueClass(spread)}">${spread == null ? "—" : comparisonFormatPp(spread)}</strong>
-      <small>${METRIC_META[state.metric].label}场所差</small>
     </div>
     ${summaryHtml(xyz)}`;
 }
@@ -802,22 +801,14 @@ function positionComparisonTooltip(tooltip, event, anchor) {
   tooltip.style.top = `${Math.max(viewportGap, Math.min(top, window.innerHeight - rect.height - viewportGap))}px`;
 }
 
-function showComparisonTooltip(timestamp, observations, event, anchor, selectedWindow) {
+function showComparisonTooltip(timestamp, observations, event, anchor) {
   const tooltip = $("#comparison-tooltip");
   const spread = observations.length === 2 ? observations[1].units - observations[0].units : null;
   tooltip.innerHTML = `<div class="comparison-tooltip-time">${beijingDate(timestamp, true)}</div>
-    ${observations.map(({ series, point, units }) => {
-      const annualized = comparisonAnnualizedAt(units, selectedWindow.start, timestamp, point.count);
-      const settlementLabel = point.lastSettlementMs == null
-        ? "区间内未结算"
-        : Math.abs(point.lastSettlementMs - timestamp) < 1_000
-          ? `${beijingDate(point.lastSettlementMs)} 已结算`
-          : `沿用 ${beijingDate(point.lastSettlementMs)} 结算`;
-      return `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
-        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span><small>${settlementLabel} · 年化 ${annualized == null ? "—" : comparisonFormatUnitsPct(annualized, 2)}</small></div>
+    ${observations.map(({ series, units }) => `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
+        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span></div>
         <strong>${comparisonFormatUnitsPct(units)}</strong>
-      </div>`;
-    }).join("")}
+      </div>`).join("")}
     ${spread == null ? "" : `<div class="comparison-tooltip-spread"><span>XYZ − Binance</span><strong>${comparisonFormatPp(spread)}</strong></div>`}`;
   tooltip.classList.add("is-visible");
   positionComparisonTooltip(tooltip, event, anchor);
@@ -851,7 +842,7 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     keyboardIndex = timeline.indexOf(timestamp);
     overlay.setAttribute("aria-valuenow", String(keyboardIndex));
     overlay.setAttribute("aria-valuetext", observations.map(({ series, units }) => `${series.venue} ${comparisonFormatUnitsPct(units)}`).join("；"));
-    showComparisonTooltip(timestamp, observations, event, overlay, view.window);
+    showComparisonTooltip(timestamp, observations, event, overlay);
     if (pin) state.compareTooltipPinned = true;
   };
 
@@ -991,8 +982,8 @@ function renderComparisonChart(view) {
   const latestVisibleSeries = availableSeries.filter((series) => series.latest?.timestamp_ms === latestVisibleTimestamp);
   const latestKey = $("#latest-key");
   if (Number.isFinite(latestVisibleTimestamp) && latestVisibleSeries.length > 0) {
-    latestKey.style.setProperty("--latest-color", latestVisibleSeries.length === 1 ? latestVisibleSeries[0].color : "var(--ink)");
-    $("#latest-key-label").textContent = `${latestVisibleSeries.map((series) => series.venue).join("/")} · ${beijingDate(latestVisibleTimestamp).slice(-5)}`;
+    latestKey.style.setProperty("--latest-color", availableSeries.length === 1 ? availableSeries[0].color : "var(--ink)");
+    $("#latest-key-label").textContent = "各场所最新";
   } else {
     latestKey.style.removeProperty("--latest-color");
     $("#latest-key-label").textContent = "暂无结算";
@@ -1008,11 +999,7 @@ function renderComparisonChart(view) {
       .map((timestamp) => ({ ...latestComparisonPointAt(series.points, timestamp), timestamp_ms: timestamp }));
     const mainPath = comparisonLinePath(displayPoints, state.metric, x, y);
     const carry = comparisonCarryPath(carryAnchor, end, state.metric, x, y);
-    const pulse = Boolean(latestReal
-      && bounds
-      && reachesLatest
-      && latestReal.timestamp_ms === bounds.last
-      && series.source?.mode === "live");
+    const pulse = Boolean(latestReal && bounds && reachesLatest && series.source?.mode === "live");
     const latestMarker = latestReal
       ? `<g class="comparison-latest-marker${pulse ? " is-live" : ""}" transform="translate(${x(latestReal.timestamp_ms).toFixed(2)} ${y(comparisonUnitsToNumber(latestReal[state.metric])).toFixed(2)})" style="--point-color:${series.color}">
           <g class="comparison-latest-pulse"><circle cx="0" cy="0" r="9" /></g>
@@ -1037,8 +1024,8 @@ function renderComparisonChart(view) {
   const xTicks = Array.from({ length: tickCount }, (_, index) => start + (end - start) * index / (tickCount - 1));
   const xLabels = xTicks.map((tick, index) => `<text class="comparison-chart-axis" x="${x(tick)}" y="${height - 12}" text-anchor="${index === 0 ? "start" : index === tickCount - 1 ? "end" : "middle"}">${beijingDate(tick).slice(5, 16)}</text>`).join("");
   container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="comparison-svg-title comparison-svg-desc">
-    <title id="comparison-svg-title">${state.compareAsset} ${METRIC_META[state.metric].label}场所对比</title>
-    <desc id="comparison-svg-desc">Binance 与 XYZ 使用无过冲平滑线连接共享结算时间点；每个可交互时刻严格沿用该场所最近累计值。</desc>
+    <title id="comparison-svg-title">${state.compareAsset} ${METRIC_META[state.metric].label}对比图</title>
+    <desc id="comparison-svg-desc">Binance 与 XYZ 使用无过冲平滑线连接共享结算时间点；每个可交互时刻采用该场所最近累计值。</desc>
     ${grids}${zeroLine}${paths}${endLabels}${xLabels}
     <g class="comparison-shared-cursor" data-comparison-cursor aria-hidden="true">
       <line class="comparison-chart-crosshair" y1="${margin.top}" y2="${height - margin.bottom}" />
@@ -1132,9 +1119,9 @@ function renderOverview() {
     button.setAttribute("aria-pressed", String(active));
   });
   const view = currentComparisonView();
-  $("#comparison-title").textContent = `${state.compareAsset} · 场所费率对比`;
-  $("#comparison-chart-heading").textContent = `累计${METRIC_META[state.metric].label}路径`;
-  $("#metric-definition").textContent = METRIC_META[state.metric].definition;
+  $("#comparison-title").textContent = `${state.compareAsset} · 费率对比`;
+  $("#comparison-chart-heading").textContent = `累计${METRIC_META[state.metric].label}`;
+  $("#mobile-filter-summary").textContent = `${state.compareAsset} · ${state.compareRange === "custom" ? "自定义" : COMPARISON_RANGE_META[state.compareRange].label}`;
   if (!view) {
     $("#comparison-summary").innerHTML = "";
     $("#comparison-chart-stage").innerHTML = '<div class="chart-empty">所选时间范围暂无可用数据。</div>';
@@ -1148,8 +1135,6 @@ function renderOverview() {
     ? "自定义时段 · 北京时间"
     : `${COMPARISON_RANGE_META[state.compareRange].label}${state.compareRange === "custom" ? "时段" : ""} · 北京时间`;
   syncComparisonTimeInputs(view.window);
-  $("#comparison-subtitle").textContent = `${beijingDate(view.window.start)} 至 ${beijingDate(view.window.end)} · 统一时间轴`;
-  $("#comparison-chart-subtitle").textContent = "独立结算 · 缺口沿用最近累计值";
   $("#record-count").textContent = `${view.series.reduce((total, series) => total + series.rows.length, 0)} 条结算`;
   renderComparisonSummary(view);
   renderComparisonChart(view);
@@ -1167,7 +1152,7 @@ function renderLegacyOverview() {
     button.setAttribute("aria-pressed", String(active));
   });
   $("#period-note").textContent = state.period === "today" ? `${state.data.today_date} · 北京时间` : "各标的 Binance 正式上线起";
-  $("#comparison-title").textContent = `${PERIOD_META[state.period].label}跨场所比较`;
+  $("#comparison-title").textContent = `${PERIOD_META[state.period].label}资费对比`;
   $("#comparison-subtitle").textContent = state.period === "today"
     ? `${state.data.today_date} · 条长表示当日累计规模，数值保留正负方向。`
     : "条长表示上线以来累计规模，数值保留正负方向。";
@@ -1538,6 +1523,13 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", () => {
   if (button.dataset.view === "details") renderDetails();
   else renderOverview();
 }));
+
+$("#mobile-filter-toggle").addEventListener("click", (event) => {
+  const overview = $("#overview-view");
+  const expanded = !overview.classList.contains("is-filter-open");
+  overview.classList.toggle("is-filter-open", expanded);
+  event.currentTarget.setAttribute("aria-expanded", String(expanded));
+});
 
 $$('[data-compare-asset]').forEach((button) => button.addEventListener("click", () => {
   state.compareAsset = button.dataset.compareAsset;

@@ -711,6 +711,8 @@ body {
   font-size: 12px;
 }
 
+.mobile-filter-toggle { display: none; }
+
 .market-filterbar {
   display: grid;
   grid-template-columns: auto minmax(340px, auto) minmax(390px, 1fr);
@@ -906,23 +908,6 @@ body {
 
 .comparison-chart-overlay.is-scrubbing { cursor: ew-resize; }
 .comparison-chart-stage.is-scrubbing { user-select: none; -webkit-user-select: none; }
-.comparison-chart-stage.is-scrubbing::after {
-  content: "左右滑动查看";
-  position: absolute;
-  top: 7px;
-  left: 50%;
-  z-index: 2;
-  transform: translateX(-50%);
-  padding: 4px 8px;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--panel-solid) 90%, transparent);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  box-shadow: var(--shadow-soft);
-  font-size: 9px;
-  pointer-events: none;
-}
-
 .comparison-footline { padding-top: 9px; }
 .comparison-tooltip { width: min(326px, calc(100vw - 24px)); min-width: 0; max-width: none; }
 .comparison-tooltip-row { grid-template-columns: 8px minmax(138px, 1fr) minmax(88px, auto); }
@@ -941,10 +926,30 @@ body {
 }
 
 @media (max-width: 760px) {
-  .funding-overview { gap: 9px; padding-top: 12px; }
-  .funding-hero { align-items: center; flex-direction: row; justify-content: space-between; gap: 8px; min-height: 30px; padding-inline: 3px; }
-  .funding-hero h1 { margin: 0; font-size: 24px; }
-  .funding-hero p { display: none; }
+  .funding-overview { gap: 8px; padding-top: 8px; }
+  .funding-hero { display: none; }
+
+  .mobile-filter-toggle {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) 24px;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 46px;
+    padding: 8px 12px;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid color-mix(in srgb, var(--pink) 16%, var(--line));
+    border-radius: 15px;
+    box-shadow: 0 8px 22px rgba(37, 24, 40, .045);
+    cursor: pointer;
+    text-align: left;
+  }
+  .mobile-filter-toggle .mobile-filter-label { color: var(--secondary); font-size: 10px; font-weight: 620; }
+  .mobile-filter-toggle strong { overflow: hidden; font-size: 12px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-filter-toggle svg { width: 20px; height: 20px; fill: currentColor; color: var(--secondary); transition: transform 160ms ease; }
+  .funding-overview.is-filter-open .mobile-filter-toggle svg { transform: rotate(180deg); }
+  .funding-overview:not(.is-filter-open) .market-filterbar { display: none; }
 
   .market-filterbar { grid-template-columns: 1fr; gap: 7px; min-height: 0; padding: 9px; border-radius: 16px; }
   .filter-group { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 7px; }
@@ -965,16 +970,16 @@ body {
   .filter-context { grid-column: auto; justify-content: flex-start; margin: -2px 0 0 49px; }
   .market-filterbar .time-error { grid-column: auto; margin: -2px 0 0 49px; }
 
-  .rate-comparison-panel { padding: 12px 11px 11px; border-radius: 18px; }
-  .comparison-heading { align-items: stretch; flex-direction: column; gap: 7px; }
+  .rate-comparison-panel { display: flex; flex-direction: column; padding: 12px 11px 11px; border-radius: 18px; }
+  .comparison-heading { order: 1; align-items: stretch; flex-direction: column; gap: 6px; margin-bottom: 5px; }
   .comparison-title-line { justify-content: space-between; }
   .comparison-title-line h2 { font-size: 15px; }
   .comparison-title-block > p { display: none; }
   .metric-control { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 7px; }
   .metric-control .metric-switch { width: 100%; grid-auto-columns: minmax(0, 1fr); }
-  .metric-control .metric-switch button { min-width: 0; min-height: 36px; padding-inline: 4px; font-size: 11px; }
+  .metric-control .metric-switch button { min-width: 0; min-height: 34px; padding-inline: 4px; font-size: 11px; }
 
-  .comparison-summary { grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; padding: 4px 0 8px; }
+  .comparison-summary { order: 5; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); border-bottom: 0; }
   .venue-summary {
     grid-template-columns: 1fr 1fr;
     gap: 6px;
@@ -1006,7 +1011,7 @@ body {
   }
   .spread-summary small { display: none; }
 
-  .comparison-chart-heading { min-height: 30px; }
+  .comparison-chart-heading { order: 2; min-height: 30px; }
   .comparison-chart-heading h3 { font-size: 14px; }
   .comparison-chart-heading p { font-size: 9px; }
   .comparison-chart-guides { gap: 7px; }
@@ -1014,22 +1019,21 @@ body {
   .latest-key { gap: 5px; font-size: 8.5px; }
   .latest-key i { width: 8px; height: 8px; }
 
-  .comparison-chart-stage { min-height: 380px; }
+  .comparison-chart-stage { order: 3; min-height: 380px; }
   .comparison-chart-stage .chart-loading,
   .comparison-chart-stage .chart-empty { min-height: 360px; }
   .comparison-chart-line { stroke-width: 2.55; }
   .comparison-chart-line-underlay { stroke-width: 4.6; opacity: .065; }
   .comparison-chart-carry { stroke-width: 2.45; }
-  .comparison-footline { gap: 8px; font-size: 9px; }
+  .comparison-footline { order: 4; gap: 8px; font-size: 9px; }
 
-  .comparison-tooltip { width: min(300px, calc(100vw - 44px)); padding: 9px 10px; border-radius: 12px; white-space: normal; }
-  .comparison-tooltip-time { margin-bottom: 4px; font-size: 10px; }
-  .comparison-tooltip-row { grid-template-columns: 7px 50px minmax(0, 1fr) auto; gap: 6px; min-height: 24px; }
-  .comparison-tooltip-venue { display: contents; }
+  .comparison-tooltip { width: min(264px, calc(100vw - 44px)); padding: 8px 9px; border-radius: 12px; white-space: normal; }
+  .comparison-tooltip-time { margin-bottom: 2px; font-size: 9px; }
+  .comparison-tooltip-row { grid-template-columns: 7px minmax(0, 1fr) auto; gap: 7px; min-height: 20px; }
+  .comparison-tooltip-venue { display: block; }
   .comparison-tooltip-venue span { font-size: 10px; }
-  .comparison-tooltip-venue small { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 7.5px; }
   .comparison-tooltip-row > strong { font-size: 10px; }
-  .comparison-tooltip-spread { margin-top: 4px; padding-top: 6px; font-size: 9px; }
+  .comparison-tooltip-spread { margin-top: 2px; padding-top: 4px; font-size: 9px; }
 }
 
 @media (max-width: 400px) {
