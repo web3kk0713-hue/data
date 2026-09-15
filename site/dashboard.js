@@ -1535,6 +1535,12 @@ $("#mobile-filter-toggle").addEventListener("click", (event) => {
   event.currentTarget.setAttribute("aria-expanded", String(expanded));
 });
 
+$("#open-raw-details").addEventListener("click", () => {
+  setView("details");
+  renderDetails();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
 $$('[data-compare-asset]').forEach((button) => button.addEventListener("click", () => {
   state.compareAsset = button.dataset.compareAsset;
   state.compareTimeDraft = false;

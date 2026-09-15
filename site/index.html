@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#f5f5f7" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='11' fill='%231d1d1f'/%3E%3Ccircle cx='32' cy='8' r='6' fill='%23ff2670'/%3E%3Ccircle cx='56' cy='32' r='6' fill='%23ff2670'/%3E%3Ccircle cx='32' cy='56' r='6' fill='%23ff2670'/%3E%3Ccircle cx='8' cy='32' r='6' fill='%23ff2670'/%3E%3C/svg%3E" />
     <title>Funding Lens · 资金费率看板</title>
-    <link rel="stylesheet" href="./dashboard.css?v=20260915-4" />
+    <link rel="stylesheet" href="./dashboard.css?v=20260915-5" />
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -24,10 +24,6 @@
           <button class="nav-item is-active" type="button" data-view="overview" aria-pressed="true">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z" /></svg>
             <span>概览</span>
-          </button>
-          <button class="nav-item" type="button" data-view="details" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 4h12V6H6v2Zm0 5h4v-3H6v3Zm6 0h6v-3h-6v3Zm-6 5h4v-3H6v3Zm6 0h6v-3h-6v3Z" /></svg>
-            <span>资金费率详情</span>
           </button>
         </nav>
 
@@ -177,7 +173,13 @@
               <div><span>非交易时段</span><strong>09:25–09:30、午间、盘后、周末及休市日</strong></div>
             </div>
             <div class="source-status-list" id="source-status-list" aria-label="资金费率数据源状态"></div>
-            <p class="method-note">“当日”按北京时间自然日 00:00–23:59:59 统计，并按资金费率结算时点归类；不代表整段费率计提窗口都发生在该时段。XYZ、PARA 是 Hyperliquid HIP-3 DEX 命名空间；底层数据提供商为 Binance 与 Hyperliquid。</p>
+            <div class="method-footer">
+              <p class="method-note">“当日”按北京时间自然日 00:00–23:59:59 统计，并按资金费率结算时点归类；不代表整段费率计提窗口都发生在该时段。XYZ、PARA 是 Hyperliquid HIP-3 DEX 命名空间；底层数据提供商为 Binance 与 Hyperliquid。</p>
+              <button class="method-details-link" type="button" id="open-raw-details">
+                <span>查看原始明细</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+              </button>
+            </div>
           </details>
         </footer>
       </main>
@@ -186,6 +188,6 @@
     <div class="comparison-tooltip" id="comparison-tooltip" role="status" aria-live="polite"></div>
     <div class="chart-tooltip" id="chart-tooltip" role="status" aria-live="polite"></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./dashboard.js?v=20260915-4"></script>
+    <script type="module" src="./dashboard.js?v=20260915-5"></script>
   </body>
 </html>

@@ -397,7 +397,12 @@ tbody tr:hover { background: var(--track); }
 .source-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--tertiary); }
 .source-chip.is-live i { background: var(--pink); }
 .source-chip.is-snapshot i { background: var(--violet); }
-.method-note { margin: 0; padding: 0 20px 20px; color: var(--secondary); font-size: 11px; }
+.method-footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 0 20px 20px; }
+.method-note { max-width: 920px; margin: 0; color: var(--secondary); font-size: 11px; }
+.method-details-link { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; min-height: 28px; padding: 0 4px; color: var(--secondary); background: transparent; border: 0; border-radius: 7px; font-size: 11px; cursor: pointer; }
+.method-details-link:hover { color: var(--ink); background: var(--track); }
+.method-details-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--pink) 44%, transparent); outline-offset: 2px; }
+.method-details-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .toast {
   position: fixed;
@@ -1036,6 +1041,8 @@ body {
   .comparison-tooltip-row > strong { font-size: 10px; }
   .comparison-tooltip-apr { font-size: 8.5px; }
   .comparison-tooltip-spread { margin-top: 2px; padding-top: 4px; font-size: 9px; }
+  .method-footer { align-items: stretch; flex-direction: column; gap: 8px; }
+  .method-details-link { align-self: flex-start; min-height: 40px; padding-inline: 8px; }
 }
 
 @media (max-width: 400px) {
