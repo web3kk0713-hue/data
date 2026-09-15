@@ -831,6 +831,8 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
   let keyboardIndex = timeline.length - 1;
   let pressTimer = null;
   let touchGesture = null;
+  let touchFrame = null;
+  let pendingTouchPoint = null;
   let suppressNextClick = false;
 
   const show = (timestamp, event = null, pin = false) => {
@@ -861,13 +863,29 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     pressTimer = null;
   };
 
-  const finishTouchGesture = (event = null) => {
+  const clearTouchFrame = () => {
+    if (touchFrame != null) window.cancelAnimationFrame(touchFrame);
+    touchFrame = null;
+    pendingTouchPoint = null;
+  };
+
+  const scheduleTouchShow = (event) => {
+    const coalesced = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
+    const latest = coalesced.length ? coalesced[coalesced.length - 1] : event;
+    pendingTouchPoint = { clientX: latest.clientX, clientY: latest.clientY };
+    if (touchFrame != null) return;
+    touchFrame = window.requestAnimationFrame(() => {
+      const point = pendingTouchPoint;
+      touchFrame = null;
+      pendingTouchPoint = null;
+      if (!point || !touchGesture?.scrubbing) return;
+      show(timestampFromPointer(point), point, true);
+    });
+  };
+
+  const resetTouchGesture = () => {
     clearPressTimer();
-    if (touchGesture?.scrubbing && event) show(timestampFromPointer(event), event, true);
-    if (touchGesture?.scrubbing) {
-      suppressNextClick = true;
-      window.setTimeout(() => { suppressNextClick = false; }, 650);
-    }
+    clearTouchFrame();
     try {
       if (touchGesture && overlay.hasPointerCapture(touchGesture.pointerId)) overlay.releasePointerCapture(touchGesture.pointerId);
     } catch (_) {
@@ -878,6 +896,23 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     touchGesture = null;
   };
 
+  const finishTouchGesture = (event = null) => {
+    const wasScrubbing = Boolean(touchGesture?.scrubbing);
+    if (wasScrubbing && event) show(timestampFromPointer(event), event, true);
+    if (wasScrubbing) {
+      suppressNextClick = true;
+      window.setTimeout(() => { suppressNextClick = false; }, 650);
+    }
+    resetTouchGesture();
+  };
+
+  const cancelTouchGesture = () => {
+    resetTouchGesture();
+    suppressNextClick = false;
+    state.compareTooltipPinned = false;
+    hideComparisonTooltip(cursor);
+  };
+
   overlay.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "touch") return;
     clearPressTimer();
@@ -885,6 +920,8 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
       scrubbing: false,
     };
     pressTimer = window.setTimeout(() => {
@@ -894,22 +931,27 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
       overlay.classList.add("is-scrubbing");
       container.classList.add("is-scrubbing");
       try { overlay.setPointerCapture(event.pointerId); } catch (_) { /* Pointer capture is progressive enhancement. */ }
-      show(timestampFromPointer(event), event, true);
+      const point = { clientX: touchGesture.lastX, clientY: touchGesture.lastY };
+      show(timestampFromPointer(point), point, true);
     }, 300);
   });
 
   overlay.addEventListener("pointermove", (event) => {
     if (event.pointerType === "touch" && touchGesture?.pointerId === event.pointerId) {
+      touchGesture.lastX = event.clientX;
+      touchGesture.lastY = event.clientY;
       if (!touchGesture.scrubbing) {
-        const moved = Math.hypot(event.clientX - touchGesture.startX, event.clientY - touchGesture.startY);
-        if (moved > 8) {
-          clearPressTimer();
-          touchGesture = null;
+        const deltaX = Math.abs(event.clientX - touchGesture.startX);
+        const deltaY = Math.abs(event.clientY - touchGesture.startY);
+        const verticalScrollIntent = deltaY > 8 && deltaY > deltaX * 1.2;
+        const leftLongPressArea = Math.hypot(deltaX, deltaY) > 18;
+        if (verticalScrollIntent || leftLongPressArea) {
+          cancelTouchGesture();
         }
         return;
       }
       event.preventDefault();
-      show(timestampFromPointer(event), event, true);
+      scheduleTouchShow(event);
       return;
     }
     if (event.pointerType !== "touch" && !state.compareTooltipPinned) show(timestampFromPointer(event), event, false);
@@ -918,7 +960,8 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     if (event.pointerType === "touch" && touchGesture?.pointerId === event.pointerId) finishTouchGesture(event);
   });
   overlay.addEventListener("pointercancel", (event) => {
-    if (event.pointerType === "touch" && touchGesture?.pointerId === event.pointerId) finishTouchGesture();
+    if (event.pointerType !== "touch" || touchGesture?.pointerId !== event.pointerId) return;
+    cancelTouchGesture();
   });
   overlay.addEventListener("pointerleave", (event) => {
     if (event.pointerType !== "touch" && !state.compareTooltipPinned) hideComparisonTooltip(cursor);

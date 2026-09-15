@@ -589,7 +589,7 @@ tbody tr:hover { background: var(--track); }
 .latest-key i { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--pink); }
 .latest-key.is-live i::after { content: ""; position: absolute; inset: -4px; border: 1px solid color-mix(in srgb, var(--pink) 55%, transparent); border-radius: 50%; animation: comparison-key-pulse 1.8s ease-out infinite; }
 
-.comparison-chart-stage { position: relative; min-height: 390px; margin-top: 7px; overflow: hidden; }
+.comparison-chart-stage { position: relative; min-height: 390px; margin-top: 7px; overflow: hidden; touch-action: pan-y pinch-zoom; }
 .comparison-chart-stage svg { display: block; width: 100%; height: auto; overflow: visible; }
 .comparison-chart-stage .chart-loading, .comparison-chart-stage .chart-empty { min-height: 370px; display: grid; place-items: center; color: var(--secondary); font-size: 12px; }
 .comparison-chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -607,7 +607,7 @@ tbody tr:hover { background: var(--track); }
 .comparison-shared-marker { stroke: var(--panel-solid); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .comparison-shared-cursor { opacity: 0; pointer-events: none; }
 .comparison-shared-cursor.is-visible { opacity: 1; }
-.comparison-chart-overlay { fill: transparent; cursor: crosshair; touch-action: pan-y; outline: none; }
+.comparison-chart-overlay { fill: transparent; cursor: crosshair; touch-action: pan-y pinch-zoom; outline: none; }
 .comparison-chart-overlay:focus-visible { stroke: color-mix(in srgb, var(--pink) 55%, transparent); stroke-width: 1; }
 .comparison-footline { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--secondary); font-size: 10px; }
 .apr-label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
