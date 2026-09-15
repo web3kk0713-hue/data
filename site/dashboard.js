@@ -975,9 +975,6 @@ function bindComparisonChartInteractions({ container, view, timeline, x, y }) {
     state.compareTooltipPinned = !state.compareTooltipPinned;
     show(timestampFromPointer(event), event, state.compareTooltipPinned);
   });
-  overlay.addEventListener("contextmenu", (event) => {
-    event.preventDefault();
-  });
   overlay.addEventListener("focus", () => show(timeline[keyboardIndex], null, false));
   overlay.addEventListener("blur", () => {
     if (!state.compareTooltipPinned) hideComparisonTooltip(cursor);
@@ -1583,6 +1580,10 @@ $("#open-raw-details").addEventListener("click", () => {
   renderDetails();
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
+
+for (const nativeEvent of ["contextmenu", "dragstart", "selectstart"]) {
+  $("#comparison-chart-stage").addEventListener(nativeEvent, (event) => event.preventDefault(), true);
+}
 
 $$('[data-compare-asset]').forEach((button) => button.addEventListener("click", () => {
   state.compareAsset = button.dataset.compareAsset;
