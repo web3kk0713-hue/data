@@ -540,7 +540,7 @@ function comparisonValueClass(units) {
 
 function comparisonAnnualizedAt(units, startMs, timestampMs, eventCount) {
   const durationMs = timestampMs - startMs;
-  if (durationMs < 24 * 60 * 60 * 1000 || eventCount < 1) return null;
+  if (durationMs <= 0 || eventCount < 1) return null;
   return comparisonRoundDiv(units * COMPARISON_YEAR_MS, BigInt(Math.round(durationMs)));
 }
 
