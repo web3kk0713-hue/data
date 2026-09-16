@@ -571,6 +571,8 @@ tbody tr:hover { background: var(--track); }
 .venue-name i { width: 8px; height: 8px; border-radius: 50%; background: var(--venue-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--venue-color) 11%, transparent); }
 .venue-name strong { overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-size: 14px; font-weight: 680; }
 .venue-identity small, .summary-metric small { color: var(--secondary); font-size: 10px; white-space: nowrap; }
+.venue-identity small.is-pending { color: #b87300; font-weight: 620; }
+.venue-identity small.is-warning { color: var(--pink-dark); font-weight: 650; }
 .summary-metric { min-width: 0; display: grid; gap: 4px; }
 .summary-metric span { color: var(--secondary); font-size: 10px; }
 .summary-metric strong { color: var(--ink); font-size: clamp(17px, 1.6vw, 22px); font-weight: 650; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; }
@@ -605,6 +607,9 @@ tbody tr:hover { background: var(--track); }
 .comparison-end-label { fill: var(--ink); font-family: inherit; font-size: 10px; font-weight: 620; font-variant-numeric: tabular-nums; }
 .comparison-chart-crosshair { stroke: color-mix(in srgb, var(--ink) 34%, transparent); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
 .comparison-shared-marker { stroke: var(--panel-solid); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.comparison-settlement-status circle { fill: var(--panel-solid); stroke: #c47b00; stroke-width: 1.7; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.comparison-settlement-status.is-missing circle { stroke: var(--pink-dark); stroke-dasharray: none; }
+.comparison-settlement-status path { fill: none; stroke: var(--pink-dark); stroke-width: 1.35; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .comparison-shared-cursor { opacity: 0; pointer-events: none; }
 .comparison-shared-cursor.is-visible { opacity: 1; }
 .comparison-chart-overlay { fill: transparent; cursor: crosshair; touch-action: pan-y pinch-zoom; outline: none; }
@@ -857,6 +862,8 @@ body {
 .comparison-chart-heading p { font-size: 10px; }
 .comparison-chart-guides { display: flex; align-items: center; gap: 14px; }
 .comparison-gesture-hint { display: none; color: var(--secondary); font-size: 9px; }
+.zero-settlement-key { display: inline-flex; align-items: center; gap: 6px; color: var(--secondary); font-size: 9px; white-space: nowrap; }
+.zero-settlement-key i { width: 7px; height: 7px; border: 1.6px solid var(--pink); border-radius: 50%; background: var(--panel-solid); box-shadow: 0 0 0 2px color-mix(in srgb, var(--pink) 7%, transparent); }
 
 .latest-key { white-space: nowrap; }
 .latest-key i {
@@ -890,6 +897,21 @@ body {
   stroke-dasharray: 4 5;
   opacity: .44;
   vector-effect: non-scaling-stroke;
+}
+
+.comparison-settlement-marker {
+  fill: var(--point-color);
+  stroke: var(--panel-solid);
+  stroke-width: 1.35;
+  opacity: .72;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+.comparison-settlement-marker.is-zero {
+  fill: var(--panel-solid);
+  stroke: var(--point-color);
+  stroke-width: 1.8;
+  opacity: 1;
 }
 
 .comparison-latest-marker { pointer-events: none; }
@@ -1021,6 +1043,8 @@ body {
   .comparison-chart-heading h3 { font-size: 14px; }
   .comparison-chart-heading p { font-size: 9px; }
   .comparison-chart-guides { gap: 7px; }
+  .zero-settlement-key { gap: 4px; font-size: 8px; }
+  .zero-settlement-key i { width: 6px; height: 6px; }
   .comparison-gesture-hint { display: inline; }
   .latest-key { gap: 5px; font-size: 8.5px; }
   .latest-key i { width: 8px; height: 8px; }
@@ -1059,7 +1083,8 @@ body {
   .comparison-chart-heading { align-items: flex-start; gap: 8px; }
   .comparison-chart-guides { display: grid; justify-items: end; gap: 2px; padding-top: 1px; }
   .comparison-gesture-hint,
-  .latest-key { font-size: 8px; }
+  .latest-key,
+  .zero-settlement-key { font-size: 8px; }
 }
 
 @media (max-width: 340px) {

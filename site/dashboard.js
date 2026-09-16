@@ -35,7 +35,7 @@ const COMPARISON_VENUE_META = {
   XYZ: { color: "#7916f3" },
 };
 const COMPARISON_RANGE_META = {
-  "24h": { label: "24小时", durationMs: 24 * 60 * 60 * 1000 },
+  today: { label: "当天", durationMs: null },
   "7d": { label: "7天", durationMs: 7 * 24 * 60 * 60 * 1000 },
   "14d": { label: "14天", durationMs: 14 * 24 * 60 * 60 * 1000 },
   all: { label: "上线以来", durationMs: null },
@@ -43,6 +43,19 @@ const COMPARISON_RANGE_META = {
 };
 const COMPARISON_RATE_SCALE = 1_000_000_000_000n;
 const COMPARISON_YEAR_MS = 365n * 24n * 60n * 60n * 1000n;
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const FUNDING_SETTLEMENT_GRACE_MS = 10 * 60 * 1000;
+const BINANCE_SETTLEMENT_SCHEDULES = {
+  CXMT: [
+    { firstMs: Date.UTC(2026, 7, 18, 8), intervalMs: 8 * HOUR_MS, untilMs: Date.UTC(2026, 8, 4, 12) },
+    { firstMs: Date.UTC(2026, 8, 4, 12), intervalMs: 4 * HOUR_MS },
+  ],
+  UNITREE: [
+    { firstMs: Date.UTC(2026, 7, 19, 8), intervalMs: 8 * HOUR_MS, untilMs: Date.UTC(2026, 7, 19, 12) },
+    { firstMs: Date.UTC(2026, 7, 19, 12), intervalMs: 4 * HOUR_MS },
+  ],
+};
 
 const FUNDING_SERIES = [
   { asset: "CXMT", venue: "Binance", contract: "CXMTUSDT", listingStartMs: 1787029200000, provider: "binance" },
@@ -545,7 +558,7 @@ function comparisonAnnualizedAt(units, startMs, timestampMs, eventCount) {
 }
 
 function beijingDateTimeInput(timestampMs) {
-  const china = new Date(timestampMs + 8 * 60 * 60 * 1000);
+  const china = new Date(timestampMs + BEIJING_OFFSET_MS);
   const year = china.getUTCFullYear();
   const month = String(china.getUTCMonth() + 1).padStart(2, "0");
   const day = String(china.getUTCDate()).padStart(2, "0");
@@ -559,7 +572,36 @@ function parseBeijingDateTime(value, inclusiveEnd = false) {
   if (!match) return null;
   const [, year, month, day, hour, minute, second = "0"] = match;
   const timestamp = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute), Number(second));
-  return Number.isFinite(timestamp) ? timestamp + (inclusiveEnd ? 999 : 0) : null;
+  const inclusivePadding = match[6] == null ? 59_999 : 999;
+  return Number.isFinite(timestamp) ? timestamp + (inclusiveEnd ? inclusivePadding : 0) : null;
+}
+
+function beijingDayStart(timestampMs) {
+  const china = new Date(timestampMs + BEIJING_OFFSET_MS);
+  return Date.UTC(china.getUTCFullYear(), china.getUTCMonth(), china.getUTCDate()) - BEIJING_OFFSET_MS;
+}
+
+function comparisonSettlementHour(timestampMs) {
+  return Math.round(Number(timestampMs) / HOUR_MS) * HOUR_MS;
+}
+
+function comparisonExpectedBinanceSettlements(asset, selectedWindow) {
+  const schedules = BINANCE_SETTLEMENT_SCHEDULES[asset] || [];
+  const bounds = comparisonDataBounds();
+  const horizon = Math.min(selectedWindow.end, bounds?.last ?? selectedWindow.end);
+  const timestamps = schedules.flatMap((schedule) => {
+    const segmentEnd = Math.min(horizon, schedule.untilMs == null ? horizon : schedule.untilMs - 1);
+    if (segmentEnd < schedule.firstMs || segmentEnd < selectedWindow.start) return [];
+    const firstIndex = Math.max(0, Math.ceil((selectedWindow.start - schedule.firstMs) / schedule.intervalMs));
+    const values = [];
+    for (let timestamp = schedule.firstMs + firstIndex * schedule.intervalMs;
+      timestamp <= segmentEnd;
+      timestamp += schedule.intervalMs) {
+      values.push(timestamp);
+    }
+    return values;
+  });
+  return { horizon, timestamps: [...new Set(timestamps)].sort((left, right) => left - right) };
 }
 
 function comparisonSourceFor(venue) {
@@ -576,9 +618,12 @@ function comparisonDataBounds() {
   const availableBounds = venueBounds.filter((bound) => Number.isFinite(bound.first) && Number.isFinite(bound.last));
   if (!availableBounds.length) return null;
   const listingStart = FUNDING_SERIES.find((series) => series.asset === state.compareAsset)?.listingStartMs;
+  const latestRecord = Math.max(...availableBounds.map((bound) => bound.last));
+  const generatedAt = Date.parse(state.data.generated_at);
+  const dataHorizon = Number.isFinite(generatedAt) ? Math.max(latestRecord, generatedAt) : latestRecord;
   return {
     first: Number.isFinite(listingStart) ? listingStart : Math.min(...availableBounds.map((bound) => bound.first)),
-    last: Math.max(...availableBounds.map((bound) => bound.last)),
+    last: dataHorizon,
   };
 }
 
@@ -590,6 +635,8 @@ function comparisonWindow() {
   if (state.compareRange === "custom") {
     start = Math.max(bounds.first, state.compareCustomStartMs ?? bounds.first);
     end = Math.min(bounds.last, state.compareCustomEndMs ?? bounds.last);
+  } else if (state.compareRange === "today") {
+    start = Math.max(bounds.first, beijingDayStart(end));
   } else {
     const duration = COMPARISON_RANGE_META[state.compareRange].durationMs;
     if (duration != null) start = Math.max(bounds.first, end - duration);
@@ -620,9 +667,17 @@ function buildComparisonSeries(venue, selectedWindow) {
     if (rateUnits < 0n) negative += rateUnits;
     net += rateUnits;
     count += 1;
-    lastSettlementMs = row.timestamp_ms;
-    points.push({ timestamp_ms: row.timestamp_ms, positive, negative, net, count, lastSettlementMs, event: row });
+    lastSettlementMs = comparisonSettlementHour(row.timestamp_ms);
+    points.push({ timestamp_ms: lastSettlementMs, positive, negative, net, count, lastSettlementMs, event: row });
   });
+  const expected = venue === "Binance"
+    ? comparisonExpectedBinanceSettlements(state.compareAsset, selectedWindow)
+    : { horizon: selectedWindow.end, timestamps: [] };
+  const actualSettlementTimes = new Set(rows.map((row) => comparisonSettlementHour(row.timestamp_ms)));
+  const pendingSettlementTimes = expected.timestamps.filter((timestamp) =>
+    !actualSettlementTimes.has(timestamp) && expected.horizon < timestamp + FUNDING_SETTLEMENT_GRACE_MS);
+  const missingSettlementTimes = expected.timestamps.filter((timestamp) =>
+    !actualSettlementTimes.has(timestamp) && expected.horizon >= timestamp + FUNDING_SETTLEMENT_GRACE_MS);
   if (available && points.at(-1).timestamp_ms < selectedWindow.end) {
     points.push({ timestamp_ms: selectedWindow.end, positive, negative, net, count, lastSettlementMs, event: null, extension: true });
   }
@@ -640,6 +695,9 @@ function buildComparisonSeries(venue, selectedWindow) {
     annualizedUnits: available ? comparisonAnnualizedAt(selectedUnits, selectedWindow.start, selectedWindow.end, count) : null,
     latest: rows.at(-1) || null,
     source: comparisonSourceFor(venue),
+    expectedSettlementTimes: expected.timestamps,
+    pendingSettlementTimes,
+    missingSettlementTimes,
   };
 }
 
@@ -664,11 +722,21 @@ function renderComparisonSummary(view) {
     const latestLabel = series.latest
       ? `${series.rows.length} 次 · 最新 ${beijingDate(series.latest.timestamp_ms)}`
       : "区间内未结算";
+    const statusLabel = series.missingSettlementTimes.length > 0
+      ? ` · 缺 ${series.missingSettlementTimes.length} 个应结算点`
+      : series.pendingSettlementTimes.length > 0
+        ? ` · ${series.pendingSettlementTimes.length} 个待更新`
+        : "";
+    const statusClass = series.missingSettlementTimes.length > 0
+      ? " is-warning"
+      : series.pendingSettlementTimes.length > 0
+        ? " is-pending"
+        : "";
     const annualized = series.annualizedUnits == null ? "—" : comparisonFormatUnitsPct(series.annualizedUnits, 2);
     return `<article class="venue-summary" style="--venue-color:${series.color}">
       <div class="venue-identity">
         <div class="venue-name"><i></i><strong>${series.venue}</strong></div>
-        <small>${latestLabel}</small>
+        <small class="${statusClass.trim()}">${latestLabel}${statusLabel}</small>
       </div>
       <div class="summary-metric">
         <span>${METRIC_META[state.metric].summaryLabel}</span>
@@ -706,7 +774,11 @@ function comparisonLinePath(points, metric, x, y) {
   const coordinates = points.map((point) => ({
     x: x(point.timestamp_ms),
     y: y(comparisonUnitsToNumber(point[metric])),
-  }));
+  })).reduce((result, point) => {
+    if (result.length && Math.abs(result.at(-1).x - point.x) < 0.001) result[result.length - 1] = point;
+    else result.push(point);
+    return result;
+  }, []);
   if (!coordinates.length) return "";
   if (coordinates.length === 1) return `M${coordinates[0].x.toFixed(2)},${coordinates[0].y.toFixed(2)}`;
 
@@ -727,6 +799,21 @@ function comparisonLinePath(points, metric, x, y) {
     const previousWeight = 2 * nextInterval + previousInterval;
     const nextWeight = nextInterval + 2 * previousInterval;
     slopes[index] = (previousWeight + nextWeight) / (previousWeight / previous + nextWeight / next);
+  }
+  for (let index = 0; index < secants.length; index += 1) {
+    if (secants[index] === 0) {
+      slopes[index] = 0;
+      slopes[index + 1] = 0;
+      continue;
+    }
+    const leftRatio = slopes[index] / secants[index];
+    const rightRatio = slopes[index + 1] / secants[index];
+    const magnitude = Math.hypot(leftRatio, rightRatio);
+    if (magnitude > 3) {
+      const scale = 3 / magnitude;
+      slopes[index] = scale * leftRatio * secants[index];
+      slopes[index + 1] = scale * rightRatio * secants[index];
+    }
   }
 
   const commands = [`M${coordinates[0].x.toFixed(2)},${coordinates[0].y.toFixed(2)}`];
@@ -807,8 +894,20 @@ function showComparisonTooltip(timestamp, observations, event, anchor, selectedW
   tooltip.innerHTML = `<div class="comparison-tooltip-time">${beijingDate(timestamp, true)}</div>
     ${observations.map(({ series, point, units }) => {
       const annualized = comparisonAnnualizedAt(units, selectedWindow.start, timestamp, point.count);
+      const exactSettlement = point.event && point.timestamp_ms === timestamp;
+      const missingExpected = series.missingSettlementTimes.includes(timestamp);
+      const pendingExpected = series.pendingSettlementTimes.includes(timestamp);
+      const settlementLabel = missingExpected
+        ? "应结算未返回"
+        : pendingExpected
+          ? "结算待更新"
+          : point.lastSettlementMs == null
+            ? "区间内未结算"
+            : exactSettlement
+              ? `本次 ${comparisonFormatUnitsPct(comparisonDecimalToUnits(point.event.funding_rate_raw ?? point.event.funding_rate))}`
+              : `沿用 ${beijingDate(point.lastSettlementMs).slice(-5)}`;
       return `<div class="comparison-tooltip-row" style="--row-color:${series.color}">
-        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span></div>
+        <i></i><div class="comparison-tooltip-venue"><span>${series.venue}</span><small>${settlementLabel}</small></div>
         <strong>${comparisonFormatUnitsPct(units)}</strong>
         <small class="comparison-tooltip-apr">年化 ${annualized == null ? "—" : comparisonFormatUnitsPct(annualized, 2)}</small>
       </div>`;
@@ -1032,18 +1131,40 @@ function renderComparisonChart(view) {
     latestKey.style.removeProperty("--latest-color");
     $("#latest-key-label").textContent = "暂无结算";
   }
-  const timeline = [...new Set([start, end, ...availableSeries.flatMap((series) => series.rows.map((row) => row.timestamp_ms))])].sort((left, right) => left - right);
+  const timeline = [...new Set([
+    start,
+    end,
+    ...availableSeries.flatMap((series) => series.points.filter((point) => point.event).map((point) => point.timestamp_ms)),
+    ...availableSeries.flatMap((series) => series.pendingSettlementTimes),
+    ...availableSeries.flatMap((series) => series.missingSettlementTimes),
+  ])].sort((left, right) => left - right);
   const paths = availableSeries.map((series) => {
     const realPoints = series.points.filter((point) => !point.extension);
     const latestReal = realPoints.findLast((point) => point.event);
     const carryAnchor = latestReal || realPoints.at(-1);
-    const displayEnd = latestReal?.timestamp_ms ?? end;
-    const displayPoints = timeline
-      .filter((timestamp) => timestamp <= displayEnd)
-      .map((timestamp) => ({ ...latestComparisonPointAt(series.points, timestamp), timestamp_ms: timestamp }));
-    const mainPath = comparisonLinePath(displayPoints, state.metric, x, y);
+    const mainPath = comparisonLinePath(realPoints, state.metric, x, y);
     const carry = comparisonCarryPath(carryAnchor, end, state.metric, x, y);
     const pulse = Boolean(latestReal && bounds && reachesLatest && series.source?.mode === "live");
+    const settlementMarkers = series.venue === "Binance"
+      ? realPoints.filter((point) => point.event).map((point) => {
+        const rateUnits = comparisonDecimalToUnits(point.event.funding_rate_raw ?? point.event.funding_rate);
+        const isZero = rateUnits === 0n;
+        return `<circle class="comparison-settlement-marker${isZero ? " is-zero" : ""}" data-settlement data-zero="${isZero}" data-venue="${series.venue}" data-rate="${comparisonFormatUnitsPct(rateUnits)}" cx="${x(point.timestamp_ms).toFixed(2)}" cy="${y(comparisonUnitsToNumber(point[state.metric])).toFixed(2)}" r="${isZero ? 3.25 : 2.15}" style="--point-color:${series.color}" />`;
+      }).join("")
+      : "";
+    const settlementStatusMarkers = [
+      ...series.pendingSettlementTimes.map((timestamp) => ({ timestamp, status: "pending", label: "结算待更新" })),
+      ...series.missingSettlementTimes.map((timestamp) => ({ timestamp, status: "missing", label: "应结算未返回" })),
+    ].map(({ timestamp, status, label }) => {
+      const point = latestComparisonPointAt(series.points, timestamp);
+      const markerX = x(timestamp).toFixed(2);
+      const markerY = y(comparisonUnitsToNumber(point[state.metric])).toFixed(2);
+      return `<g class="comparison-settlement-status is-${status}" data-settlement-status="${status}" transform="translate(${markerX} ${markerY})">
+        <title>${series.venue} ${label} · ${beijingDate(timestamp, true)}</title>
+        <circle cx="0" cy="0" r="5" />
+        ${status === "missing" ? '<path d="M-2.2,-2.2 L2.2,2.2 M2.2,-2.2 L-2.2,2.2" />' : ""}
+      </g>`;
+    }).join("");
     const latestMarker = latestReal
       ? `<g class="comparison-latest-marker${pulse ? " is-live" : ""}" transform="translate(${x(latestReal.timestamp_ms).toFixed(2)} ${y(comparisonUnitsToNumber(latestReal[state.metric])).toFixed(2)})" style="--point-color:${series.color}">
           <g class="comparison-latest-pulse"><circle cx="0" cy="0" r="9" /></g>
@@ -1053,6 +1174,8 @@ function renderComparisonChart(view) {
     return `<path class="comparison-chart-line-underlay" d="${mainPath}" stroke="${series.color}" />
       <path class="comparison-chart-line" d="${mainPath}" stroke="${series.color}" />
       ${carry ? `<path class="comparison-chart-carry" d="${carry}" stroke="${series.color}" />` : ""}
+      ${settlementMarkers}
+      ${settlementStatusMarkers}
       ${latestMarker}`;
   }).join("");
   latestKey.classList.toggle("is-live", Boolean(reachesLatest && latestVisibleSeries.some((series) => series.source?.mode === "live")));
@@ -1069,7 +1192,7 @@ function renderComparisonChart(view) {
   const xLabels = xTicks.map((tick, index) => `<text class="comparison-chart-axis" x="${x(tick)}" y="${height - 12}" text-anchor="${index === 0 ? "start" : index === tickCount - 1 ? "end" : "middle"}">${beijingDate(tick).slice(5, 16)}</text>`).join("");
   container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="comparison-svg-title comparison-svg-desc">
     <title id="comparison-svg-title">${state.compareAsset} ${METRIC_META[state.metric].label}对比图</title>
-    <desc id="comparison-svg-desc">Binance 与 XYZ 使用无过冲平滑线连接共享结算时间点；每个可交互时刻采用该场所最近累计值。</desc>
+    <desc id="comparison-svg-desc">曲线以单调平滑方式连接真实结算点；Binance 空心点表示本次结算费率为零，未结算时沿用最近累计值，应到但未返回的结算会显示警示点。</desc>
     ${grids}${zeroLine}${paths}${endLabels}${xLabels}
     <g class="comparison-shared-cursor" data-comparison-cursor aria-hidden="true">
       <line class="comparison-chart-crosshair" y1="${margin.top}" y2="${height - margin.bottom}" />
@@ -1127,7 +1250,7 @@ function commitComparisonTimeWindow() {
     showComparisonTimeError("请选择完整的开始和结束时间");
     return;
   }
-  if (start < bounds.first || end > bounds.last + 999) {
+  if (start < bounds.first || end > bounds.last + 59_999) {
     showComparisonTimeError("时间超出两个场所的可比较范围");
     return;
   }
@@ -1137,7 +1260,7 @@ function commitComparisonTimeWindow() {
   }
   clearComparisonTimeError();
   state.compareCustomStartMs = start;
-  state.compareCustomEndMs = end;
+  state.compareCustomEndMs = Math.min(end, bounds.last);
   state.compareRange = "custom";
   state.compareTimeDraft = false;
   renderOverview();
